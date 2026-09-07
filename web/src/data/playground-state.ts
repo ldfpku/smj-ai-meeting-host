@@ -3,6 +3,8 @@ import { VoiceId } from "@/data/voices";
 import { Preset } from "./presets";
 import { ModelId } from "./models";
 
+import { MeetingConfig } from "./meeting";
+
 export interface SessionConfig {
   model: ModelId;
   modalities: ModalitiesId;
@@ -10,6 +12,7 @@ export interface SessionConfig {
   temperature: number;
   maxOutputTokens: number | null;
   nanoBananaEnabled: boolean;
+  meetingConfig?: MeetingConfig;
 }
 
 export interface PlaygroundState {

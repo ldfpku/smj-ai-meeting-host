@@ -14,6 +14,8 @@ import {
 } from "livekit-client";
 import { useConnection } from "@/hooks/use-connection";
 import { useToast } from "@/hooks/use-toast";
+import { MeetingLiveState } from "@/data/meeting";
+
 interface Transcription {
   segment: TranscriptionSegment;
   participant?: Participant;
@@ -30,7 +32,18 @@ interface AgentContextType {
   displayTranscriptions: Transcription[];
   agent?: RemoteParticipant;
   generatedImages: GeneratedImage[];
+  meetingLiveState: MeetingLiveState;
+  updateMeetingLiveState: (partial: Partial<MeetingLiveState>) => void;
 }
+
+const defaultInitialMeetingLiveState: MeetingLiveState = {
+  currentAgendaIndex: 0,
+  startTime: null,
+  elapsedSeconds: 0,
+  decisions: [],
+  isFinished: false,
+  driftWarning: false,
+};
 
 const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
@@ -46,7 +59,71 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     Transcription[]
   >([]);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [meetingLiveState, setMeetingLiveState] = useState<MeetingLiveState>(
+    defaultInitialMeetingLiveState
+  );
   const { toast } = useToast();
+
+  const updateMeetingLiveState = (partial: Partial<MeetingLiveState>) => {
+    setMeetingLiveState((prev) => ({ ...prev, ...partial }));
+  };
+
+  useEffect(() => {
+    if (!room) return;
+
+    const handleDataReceived = (
+      payload: Uint8Array,
+      participant?: Participant,
+      kind?: any,
+      topic?: string
+    ) => {
+      if (topic === "meeting_update") {
+        try {
+          const text = new TextDecoder().decode(payload);
+          const data = JSON.parse(text);
+          console.log("Meeting update received:", data);
+          setMeetingLiveState((prev) => {
+            if (data.type === "new_decision") {
+              const exists = prev.decisions.some((d) => d.id === data.decision.id);
+              if (exists) return prev;
+              return {
+                ...prev,
+                decisions: [...prev.decisions, data.decision],
+              };
+            }
+            if (data.type === "advance_agenda") {
+              return {
+                ...prev,
+                currentAgendaIndex: data.currentAgendaIndex,
+                driftWarning: false,
+              };
+            }
+            if (data.type === "drift_warning") {
+              return {
+                ...prev,
+                driftWarning: data.active ?? true,
+              };
+            }
+            if (data.type === "state_sync") {
+              return {
+                ...prev,
+                ...data.state,
+              };
+            }
+            return { ...prev, ...data };
+          });
+        } catch (err) {
+          console.error("Failed to decode meeting_update data", err);
+        }
+      }
+    };
+
+    room.on(RoomEvent.DataReceived, handleDataReceived);
+
+    return () => {
+      room.off(RoomEvent.DataReceived, handleDataReceived);
+    };
+  }, [room]);
 
   useEffect(() => {
     if (!room) {
@@ -177,11 +254,23 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
       setRawSegments({});
       setDisplayTranscriptions([]);
       setGeneratedImages([]);
+      setMeetingLiveState({
+        ...defaultInitialMeetingLiveState,
+        startTime: Date.now(),
+      });
     }
   }, [shouldConnect]);
 
   return (
-    <AgentContext.Provider value={{ displayTranscriptions, agent, generatedImages }}>
+    <AgentContext.Provider
+      value={{
+        displayTranscriptions,
+        agent,
+        generatedImages,
+        meetingLiveState,
+        updateMeetingLiveState,
+      }}
+    >
       {children}
     </AgentContext.Provider>
   );

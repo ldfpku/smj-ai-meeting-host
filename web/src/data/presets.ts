@@ -14,7 +14,9 @@ import {
   TreePalm,
   Skull,
   ImagePlus,
+  Users,
 } from "lucide-react";
+import { defaultMeetingConfig, generateMeetingInstructions } from "./meeting";
 
 export interface Preset {
   id: string;
@@ -33,6 +35,19 @@ export enum PresetGroup {
 
 export const defaultPresets: Preset[] = [
   // Functionality Group
+  {
+    id: "meeting-moderator",
+    name: "会议主持人 (Facilitator)",
+    description: "专为解决企业会议跑题与议而不决打造：严格控时、跑题切入、催促并记录决议。",
+    instructions: generateMeetingInstructions(defaultMeetingConfig),
+    sessionConfig: {
+      ...defaultSessionConfig,
+      voice: VoiceId.AOEDE,
+      meetingConfig: defaultMeetingConfig,
+    },
+    defaultGroup: PresetGroup.FUNCTIONALITY,
+    icon: Users,
+  },
   {
     id: "helpful-ai",
     name: "Helpful AI",

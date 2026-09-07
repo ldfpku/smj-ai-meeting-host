@@ -16,14 +16,21 @@ import { useConnection } from "@/hooks/use-connection";
 import { toast } from "@/hooks/use-toast";
 import { GeminiVisualizer } from "@/components/visualizer/gemini-visualizer";
 import { NanoBananaFeed } from "@/components/nano-banana-feed";
+import { MeetingKanban } from "@/components/meeting/meeting-kanban";
+import { MeetingConfigModal } from "@/components/meeting/meeting-config-modal";
+import { defaultMeetingConfig } from "@/data/meeting";
+import { usePlaygroundState } from "@/hooks/use-playground-state";
 
 export function Chat() {
   const connectionState = useConnectionState();
   const { audioTrack, state } = useVoiceAssistant();
   const [isChatRunning, setIsChatRunning] = useState(false);
-  const { agent } = useAgent();
+  const { agent, meetingLiveState, updateMeetingLiveState } = useAgent();
   const { disconnect } = useConnection();
+  const { pgState } = usePlaygroundState();
   const [isEditingInstructions, setIsEditingInstructions] = useState(false);
+  const [showMeetingConfigModal, setShowMeetingConfigModal] = useState(false);
+  const isMeetingPreset = pgState.selectedPresetId === "meeting-moderator";
 
   const [hasSeenAgent, setHasSeenAgent] = useState(false);
 
@@ -116,31 +123,104 @@ export function Chat() {
         isEditingInstructions={isEditingInstructions}
         onToggleEdit={toggleInstructionsEdit}
       />
-      <div className="flex flex-col flex-grow items-center lg:justify-between mt-12 lg:mt-0 min-w-0">
+      <div className="flex flex-col flex-grow items-center lg:justify-between mt-12 lg:mt-0 min-w-0 w-full">
         <div className="w-full h-full flex flex-col min-w-0 gap-4">
-          {/* Mobile: Show instructions and visualizer stacked */}
-          <div className="lg:hidden w-full min-w-0 flex flex-col gap-4">
-            <Instructions />
-            {renderVisualizer()}
-          </div>
-          
-          {/* Desktop: Show instructions at top, visualizer in middle */}
-          <div className="hidden lg:flex lg:flex-col lg:h-full lg:min-w-0 w-full">
-            <div className="flex items-center justify-center w-full min-w-0">
-              <Instructions />
-            </div>
-            <div className="grow h-full flex items-center justify-center min-w-0">
-              <div className="w-full min-w-0">
-                {!isEditingInstructions && renderVisualizer()}
+          {/* 跑题早期介入黄灯预警 Banner */}
+          {isMeetingPreset && meetingLiveState.driftWarning && (
+            <div className="w-full py-2 px-4 bg-amber-500/15 border border-amber-500/40 rounded-lg flex items-center justify-between text-amber-600 dark:text-amber-400 text-xs font-semibold animate-pulse">
+              <div className="flex items-center gap-2">
+                <span>⚠️ 跑题黄灯预警：AI 主持人检测到讨论疑似偏离当前议题，请注意聚焦！</span>
               </div>
+              <button
+                onClick={() => updateMeetingLiveState({ driftWarning: false })}
+                className="underline hover:opacity-80"
+              >
+                我知道了
+              </button>
             </div>
-          </div>
-          
+          )}
+
+          {/* 会议主持人模式：双栏看板布局 */}
+          {isMeetingPreset ? (
+            <>
+              {/* Mobile: 纵向堆叠 */}
+              <div className="lg:hidden w-full min-w-0 flex flex-col gap-4 overflow-y-auto">
+                <Instructions />
+                {renderVisualizer()}
+                <div className="h-[480px]">
+                  <MeetingKanban
+                    config={pgState.sessionConfig.meetingConfig || defaultMeetingConfig}
+                    liveState={meetingLiveState}
+                    onAdvanceAgenda={(nextIdx) =>
+                      updateMeetingLiveState({ currentAgendaIndex: nextIdx })
+                    }
+                    onOpenConfigModal={() => setShowMeetingConfigModal(true)}
+                    isConnectingOrConnected={
+                      isChatRunning || connectionState === ConnectionState.Connected
+                    }
+                  />
+                </div>
+              </div>
+
+              {/* Desktop: 左右双栏布局 */}
+              <div className="hidden lg:grid lg:grid-cols-12 lg:gap-4 lg:h-full lg:min-w-0 w-full overflow-hidden">
+                <div className="lg:col-span-5 flex flex-col h-full min-w-0 justify-between">
+                  <div className="flex items-center justify-center w-full min-w-0">
+                    <Instructions />
+                  </div>
+                  <div className="grow h-full flex items-center justify-center min-w-0">
+                    <div className="w-full min-w-0">
+                      {!isEditingInstructions && renderVisualizer()}
+                    </div>
+                  </div>
+                </div>
+                <div className="lg:col-span-7 h-full min-h-0 overflow-hidden">
+                  <MeetingKanban
+                    config={pgState.sessionConfig.meetingConfig || defaultMeetingConfig}
+                    liveState={meetingLiveState}
+                    onAdvanceAgenda={(nextIdx) =>
+                      updateMeetingLiveState({ currentAgendaIndex: nextIdx })
+                    }
+                    onOpenConfigModal={() => setShowMeetingConfigModal(true)}
+                    isConnectingOrConnected={
+                      isChatRunning || connectionState === ConnectionState.Connected
+                    }
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Mobile: Show instructions and visualizer stacked */}
+              <div className="lg:hidden w-full min-w-0 flex flex-col gap-4">
+                <Instructions />
+                {renderVisualizer()}
+              </div>
+
+              {/* Desktop: Show instructions at top, visualizer in middle */}
+              <div className="hidden lg:flex lg:flex-col lg:h-full lg:min-w-0 w-full">
+                <div className="flex items-center justify-center w-full min-w-0">
+                  <Instructions />
+                </div>
+                <div className="grow h-full flex items-center justify-center min-w-0">
+                  <div className="w-full min-w-0">
+                    {!isEditingInstructions && renderVisualizer()}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
           <NanoBananaFeed />
         </div>
 
         <div className="my-4">{renderConnectionControl()}</div>
       </div>
+
+      <MeetingConfigModal
+        open={showMeetingConfigModal}
+        onOpenChange={setShowMeetingConfigModal}
+      />
     </div>
   );
 }

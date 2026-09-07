@@ -6,3 +6,5 @@ node_modules
 .env.local
 livekit.toml
 *.egg-info
+__pycache__/
+*.py[cod]

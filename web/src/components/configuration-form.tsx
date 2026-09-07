@@ -74,6 +74,7 @@ export function ConfigurationForm() {
       temperature: values.temperature,
       max_output_tokens: values.maxOutputTokens || "",
       nano_banana_enabled: values.nanoBananaEnabled,
+      meeting_config: values.meetingConfig ? JSON.stringify(values.meetingConfig) : "",
     };
     if (!agent?.identity) {
       return;

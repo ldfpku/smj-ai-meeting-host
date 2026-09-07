@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     const {
       instructions,
       geminiAPIKey,
-      sessionConfig: { model, modalities, voice, temperature, maxOutputTokens, nanoBananaEnabled },
+      sessionConfig: { model, modalities, voice, temperature, maxOutputTokens, nanoBananaEnabled, meetingConfig },
     } = playgroundState;
 
     if (!geminiAPIKey) {
@@ -48,6 +48,7 @@ export async function POST(request: Request) {
       temperature: temperature,
       max_output_tokens: maxOutputTokens,
       nano_banana_enabled: nanoBananaEnabled, // Send as boolean, not string
+      meeting_config: meetingConfig,
       gemini_api_key: geminiAPIKey,
     };
     
