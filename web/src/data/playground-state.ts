@@ -21,7 +21,7 @@ export interface PlaygroundState {
 }
 
 export const defaultSessionConfig: SessionConfig = {
-  model: ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_09_2025,
+  model: ModelId.GEMINI_3_1_FLASH_LIVE_PREVIEW,
   modalities: ModalitiesId.AUDIO_ONLY,
   voice: VoiceId.PUCK,
   temperature: 0.8,
