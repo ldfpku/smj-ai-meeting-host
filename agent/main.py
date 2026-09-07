@@ -29,6 +29,11 @@ from livekit.agents import (
     function_tool,
     utils,
 )
+from livekit.agents.voice.turn import (
+    EndpointingOptions,
+    InterruptionOptions,
+    TurnHandlingOptions,
+)
 from livekit.plugins import google
 
 # Load .env.local from current directory or parent directory
@@ -388,7 +393,7 @@ def create_warn_topic_drift_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
         "name": "warn_topic_drift",
-        "description": "当参会人员讨论明显偏离当前议程核心目标时，触发前台看板醒目的跑题黄牌警示，并辅助口头委婉干预提醒大家回归主题。",
+        "description": "当参会人员讨论明显偏离当前议程核心目标时，触发前台看板醒目的跑题黄牌警示与提示音，并立即开麦强势切入叫停拉回。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -412,7 +417,11 @@ def create_warn_topic_drift_tool(session_manager: SessionManager):
             "reason": reason,
         })
 
-        return f"已在前台看板显示跑题提醒：{reason}。请同时用得体口吻简短提醒大家回归当前议程。"
+        return (
+            f"已在前台看板亮起跑题黄牌警示并鸣响提示音：{reason}。"
+            f"请立即用清脆响亮、毋庸置疑的声音强势切入叫停：“打扰一下，请大家先暂停一下！”，"
+            f"指出偏离并强行要求大家立即回到当前议程讨论，严禁等待对方继续展开！"
+        )
 
     return warn_topic_drift
 
@@ -514,16 +523,41 @@ class SessionManager:
 
     def create_session(self, config: SessionConfig) -> AgentSession:
         """Create an AgentSession with the given configuration"""
-        session = AgentSession(
-            llm=google.realtime.RealtimeModel(
-                model=config.model,
-                voice=config.voice,
-                temperature=config.temperature,
-                max_output_tokens=int(config.max_response_output_tokens) if config.max_response_output_tokens != "inf" else None,
-                modalities=config.modalities,
-                api_key=config.gemini_api_key,
+        is_meeting = bool(config.meeting_config)
+        llm_kwargs = {
+            "model": config.model,
+            "voice": config.voice,
+            "temperature": config.temperature,
+            "max_output_tokens": int(config.max_response_output_tokens) if config.max_response_output_tokens != "inf" else None,
+            "modalities": config.modalities,
+            "api_key": config.gemini_api_key,
+        }
+
+        session_kwargs = {}
+
+        if is_meeting:
+            logger.info("Enabling Meeting Moderator audio parameters: proactive=True, silence_duration_ms=250, NO_INTERRUPTION")
+            llm_kwargs["proactivity"] = True
+            llm_kwargs["realtime_input_config"] = types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    silence_duration_ms=250,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                ),
+                activity_handling=types.ActivityHandling.NO_INTERRUPTION,
             )
-        )
+            session_kwargs["turn_handling"] = TurnHandlingOptions(
+                endpointing=EndpointingOptions(
+                    min_delay=0.15,
+                    max_delay=0.4,
+                    mode="fixed",
+                ),
+                interruption=InterruptionOptions(
+                    enabled=False,
+                ),
+            )
+
+        session_kwargs["llm"] = google.realtime.RealtimeModel(**llm_kwargs)
+        session = AgentSession(**session_kwargs)
         return session
 
     async def start_session(self, ctx: JobContext, participant: rtc.RemoteParticipant):
@@ -612,6 +646,43 @@ class SessionManager:
                 return json.dumps({"success": True, "currentAgendaIndex": target_idx})
             except Exception as err:
                 logger.error(f"Error handling advanceAgenda RPC: {err}")
+                return json.dumps({"success": False, "error": str(err)})
+
+        # Register RPC method for forcing moderator intervention
+        @ctx.room.local_participant.register_rpc_method("pg.forceIntervene")
+        async def force_intervene_rpc(data: rtc.rpc.RpcInvocationData):
+            logger.info(f"pg.forceIntervene called by {data.caller_identity}: {data.payload}")
+            try:
+                payload = json.loads(data.payload) if data.payload else {}
+                reason = payload.get("reason", "讨论内容偏离当前议程核心目标")
+
+                await self.publish_meeting_data({
+                    "type": "drift_warning",
+                    "active": True,
+                    "reason": reason,
+                })
+
+                cfg = self.current_config.meeting_config or {}
+                agendas = cfg.get("agendas", [])
+                idx = self.current_agenda_index
+                cur_title = agendas[idx].get("title", f"第 {idx + 1} 项议题") if 0 <= idx < len(agendas) else "当前议题"
+                cur_goal = agendas[idx].get("goal", "") if 0 <= idx < len(agendas) else ""
+
+                if self.current_session:
+                    prompt = (
+                        f"【主持人紧急强行切入叫停指令】：参会人员发言正在偏离议题。请立即用清脆、权威、响亮的声音开麦强行打断，"
+                        f"第一句必须明确叫停：“打扰一下，请大家先暂停一下！” 紧接着说明：“我们当前正在进行的是议题【{cur_title}】，"
+                        f"核心目标是【{cur_goal}】。刚才讨论已脱离本议题，请大家立刻收束，回到当前议题的核心讨论！”"
+                        f"态度果断有力，绝对不可退缩！"
+                    )
+                    await self.current_session.generate_reply(
+                        instructions=prompt,
+                        allow_interruptions=False,
+                    )
+
+                return json.dumps({"success": True})
+            except Exception as err:
+                logger.error(f"Error handling forceIntervene RPC: {err}")
                 return json.dumps({"success": False, "error": str(err)})
 
     async def send_image_to_frontend(self, prompt: str, image_data: bytes):

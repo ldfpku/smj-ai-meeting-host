@@ -5,6 +5,7 @@ import {
   MeetingConfig,
   MeetingLiveState,
   DecisionItem,
+  playAttentionChime,
 } from "@/data/meeting";
 import {
   Clock,
@@ -18,6 +19,7 @@ import {
   Target,
   UserCheck,
   Calendar,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -100,6 +102,25 @@ export function MeetingKanban({
         title: "已是最后一项议题",
         description: "会议所有议程已完成讨论。",
       });
+    }
+  };
+
+  const handleForceIntervene = async () => {
+    playAttentionChime();
+    try {
+      if (room?.localParticipant) {
+        await room.localParticipant.performRpc({
+          destinationIdentity: "",
+          method: "pg.forceIntervene",
+          payload: JSON.stringify({ reason: "参会人手动呼叫主持人介入纠偏" }),
+        });
+      }
+      toast({
+        title: "已呼叫主持人即刻介入",
+        description: "AI 主持人将强行打断发言并收拢全场讨论。",
+      });
+    } catch (err) {
+      console.log("Manual intervene RPC dispatched", err);
     }
   };
 
@@ -218,15 +239,27 @@ export function MeetingKanban({
             </span>
             当前议题 ({liveState.currentAgendaIndex + 1}/{config.agendas.length})
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleManualAdvance}
-            disabled={liveState.currentAgendaIndex >= config.agendas.length - 1}
-            className="h-6 px-2 text-xs text-blue-500 hover:text-blue-600 hover:bg-blue-500/10 gap-1"
-          >
-            推进议题 <ChevronRight className="w-3 h-3" />
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleForceIntervene}
+              className="h-6 px-2 text-xs text-amber-600 dark:text-amber-400 border-amber-500/40 hover:bg-amber-500/10 gap-1 font-medium"
+              title="当讨论跑题或长篇大论时，立即呼叫AI主持人强势打断介入"
+            >
+              <Zap className="w-3 h-3 text-amber-500 fill-amber-500" />
+              立即纠偏
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleManualAdvance}
+              disabled={liveState.currentAgendaIndex >= config.agendas.length - 1}
+              className="h-6 px-2 text-xs text-blue-500 hover:text-blue-600 hover:bg-blue-500/10 gap-1"
+            >
+              推进议题 <ChevronRight className="w-3 h-3" />
+            </Button>
+          </div>
         </div>
 
         <div className="text-sm font-semibold">{currentAgenda?.title}</div>

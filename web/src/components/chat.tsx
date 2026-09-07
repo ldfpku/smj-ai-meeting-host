@@ -9,7 +9,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   useConnectionState,
   useVoiceAssistant,
+  useRoomContext,
 } from "@livekit/components-react";
+import { Button } from "@/components/ui/button";
 import { ChatControls } from "@/components/chat-controls";
 import { useAgent } from "@/hooks/use-agent";
 import { useConnection } from "@/hooks/use-connection";
@@ -18,7 +20,7 @@ import { GeminiVisualizer } from "@/components/visualizer/gemini-visualizer";
 import { NanoBananaFeed } from "@/components/nano-banana-feed";
 import { MeetingKanban } from "@/components/meeting/meeting-kanban";
 import { MeetingConfigModal } from "@/components/meeting/meeting-config-modal";
-import { defaultMeetingConfig } from "@/data/meeting";
+import { defaultMeetingConfig, playAttentionChime } from "@/data/meeting";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
 
 export function Chat() {
@@ -31,6 +33,26 @@ export function Chat() {
   const [isEditingInstructions, setIsEditingInstructions] = useState(false);
   const [showMeetingConfigModal, setShowMeetingConfigModal] = useState(false);
   const isMeetingPreset = pgState.selectedPresetId === "meeting-moderator";
+  const room = useRoomContext();
+
+  const handleForceIntervene = async () => {
+    playAttentionChime();
+    try {
+      if (room?.localParticipant) {
+        await room.localParticipant.performRpc({
+          destinationIdentity: "",
+          method: "pg.forceIntervene",
+          payload: JSON.stringify({ reason: "参会人手动呼叫主持人介入纠偏" }),
+        });
+      }
+      toast({
+        title: "已呼叫主持人即刻介入",
+        description: "AI 主持人将强行打断发言并收拢全场讨论。",
+      });
+    } catch (err) {
+      console.log("forceIntervene RPC error", err);
+    }
+  };
 
   const [hasSeenAgent, setHasSeenAgent] = useState(false);
 
@@ -127,16 +149,26 @@ export function Chat() {
         <div className="w-full h-full flex flex-col min-w-0 gap-4">
           {/* 跑题早期介入黄灯预警 Banner */}
           {isMeetingPreset && meetingLiveState.driftWarning && (
-            <div className="w-full py-2 px-4 bg-amber-500/15 border border-amber-500/40 rounded-lg flex items-center justify-between text-amber-600 dark:text-amber-400 text-xs font-semibold animate-pulse">
-              <div className="flex items-center gap-2">
-                <span>⚠️ 跑题黄灯预警：AI 主持人检测到讨论疑似偏离当前议题，请注意聚焦！</span>
+            <div className="w-full py-2 px-3 sm:px-4 bg-amber-500/15 border border-amber-500/40 rounded-lg flex items-center justify-between text-amber-600 dark:text-amber-400 text-xs font-semibold shadow-sm">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="truncate">⚠️ 跑题黄灯预警：AI 主持人检测到讨论疑似偏离当前议题，请注意聚焦！</span>
               </div>
-              <button
-                onClick={() => updateMeetingLiveState({ driftWarning: false })}
-                className="underline hover:opacity-80"
-              >
-                我知道了
-              </button>
+              <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-6 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white font-medium flex items-center gap-1"
+                  onClick={handleForceIntervene}
+                >
+                  ⚡ 呼叫主持即刻打断
+                </Button>
+                <button
+                  onClick={() => updateMeetingLiveState({ driftWarning: false })}
+                  className="underline hover:opacity-80 text-muted-foreground ml-1 text-xs"
+                >
+                  忽略
+                </button>
+              </div>
             </div>
           )}
 

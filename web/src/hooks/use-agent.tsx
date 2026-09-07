@@ -14,7 +14,7 @@ import {
 } from "livekit-client";
 import { useConnection } from "@/hooks/use-connection";
 import { useToast } from "@/hooks/use-toast";
-import { MeetingLiveState } from "@/data/meeting";
+import { MeetingLiveState, playAttentionChime } from "@/data/meeting";
 
 interface Transcription {
   segment: TranscriptionSegment;
@@ -99,9 +99,13 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
               };
             }
             if (data.type === "drift_warning") {
+              const active = data.active ?? true;
+              if (active) {
+                playAttentionChime();
+              }
               return {
                 ...prev,
-                driftWarning: data.active ?? true,
+                driftWarning: active,
               };
             }
             if (data.type === "state_sync") {
