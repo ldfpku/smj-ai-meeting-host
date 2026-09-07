@@ -5,6 +5,16 @@
 @theme inline {
   /* Gemini-specific colors */
   --color-gemini-blue: #5282ed;
+
+  /* SMJAR 品牌色（取自 logo，见 public/static/brand/README） */
+  --color-brand-green: #1F7A3C;
+  --color-brand-green-dark: #0A3A1B;
+  --color-brand-green-light: #58B96C;
+
+  /* 品牌化表面：随主题切换，用于系统指令面板与标识动画衬底 */
+  --color-brand-surface: var(--brand-surface);
+  --color-brand-border: var(--brand-border);
+  --color-brand-fg: var(--brand-fg);
   
   /* Semantic background colors */
   --color-background: var(--background);
@@ -83,7 +93,13 @@
 
 :root {
   --radius: 0.625rem;
-  
+
+  /* 品牌化表面（浅色）：极浅绿底 + 绿灰描边，与 logo 同色系 */
+  --brand-surface: #F3F8F4;
+  --brand-border: #D7E8DD;
+  --brand-fg: #1B3A28;
+  --brand-glow: rgba(31, 122, 60, 0.10);
+
   /* Light theme */
   --background: oklch(1 0 0);
   --bg0: #FFFFFF;
@@ -143,6 +159,12 @@
 }
 
 .dark {
+  /* 品牌化表面（深色）：深绿黑底，比纯黑更贴合品牌 */
+  --brand-surface: #0B1D13;
+  --brand-border: #1C4630;
+  --brand-fg: #CBE5D5;
+  --brand-glow: rgba(88, 185, 108, 0.14);
+
   /* Dark theme */
   --background: oklch(0.145 0 0);
   --bg0: #000000;

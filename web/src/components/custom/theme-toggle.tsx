@@ -35,14 +35,14 @@ export function ThemeToggle() {
               className="h-9 w-9"
             >
               {getThemeIcon()}
-              <span className="sr-only">Toggle theme</span>
+              <span className="sr-only">切换主题</span>
             </Button>
           </PopoverTrigger>
           <PopoverContent 
             className="w-48"
           >
             <div className="space-y-2">
-              <h4 className="font-medium leading-none">Theme</h4>
+              <h4 className="font-medium leading-none">主题</h4>
               <div className="space-y-1">
                 <Button
                   variant="ghost"
@@ -50,7 +50,7 @@ export function ThemeToggle() {
                   onClick={() => setTheme('light')}
                 >
                   <Sun className="mr-2 h-4 w-4" />
-                  Light
+                  浅色
                 </Button>
                 <Button
                   variant="ghost"
@@ -58,7 +58,7 @@ export function ThemeToggle() {
                   onClick={() => setTheme('dark')}
                 >
                   <Moon className="mr-2 h-4 w-4" />
-                  Dark
+                  深色
                 </Button>
                 <Button
                   variant="ghost"
@@ -66,7 +66,7 @@ export function ThemeToggle() {
                   onClick={() => setTheme('system')}
                 >
                   <Monitor className="mr-2 h-4 w-4" />
-                  System
+                  跟随系统
                 </Button>
               </div>
             </div>
@@ -80,25 +80,25 @@ export function ThemeToggle() {
   return (
     <Select value={theme} onValueChange={setTheme}>
       <SelectTrigger className="w-full" variant="ghost" size="md">
-        <SelectValue placeholder="Theme" />
+        <SelectValue placeholder="主题" />
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="light">
           <div className="flex items-center gap-2">
             <Sun className="h-4 w-4" />
-            Light
+            浅色
           </div>
         </SelectItem>
         <SelectItem value="dark">
           <div className="flex items-center gap-2">
             <Moon className="h-4 w-4" />
-            Dark
+            深色
           </div>
         </SelectItem>
         <SelectItem value="system">
           <div className="flex items-center gap-2">
             <Monitor className="h-4 w-4" />
-            System
+            跟随系统
           </div>
         </SelectItem>
       </SelectContent>

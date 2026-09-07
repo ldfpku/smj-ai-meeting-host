@@ -101,15 +101,13 @@ export const playgroundStateHelpers = {
   },
 
   /**
-   * Checks if the immutable nano banana prompt should be used
-   * Returns true if nano banana is enabled AND the current preset is NOT the creative-artist preset
+   * Checks if the immutable nano banana prompt should be used.
+   * Returns true whenever nano banana is enabled: no preset carries its own
+   * image-generation instructions any more, so the immutable prompt is always
+   * the one that teaches the model how to call the tool.
    */
   shouldUseImmutablePrompt: (state: PlaygroundState): boolean => {
-    const { sessionConfig, selectedPresetId } = state;
-    return (
-      sessionConfig.nanoBananaEnabled &&
-      selectedPresetId !== "creative-artist"
-    );
+    return state.sessionConfig.nanoBananaEnabled;
   },
 
   /**

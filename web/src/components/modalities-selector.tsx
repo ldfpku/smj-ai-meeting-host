@@ -27,7 +27,7 @@ export function ModalitiesSelector({
         <HoverCard openDelay={200}>
           <HoverCardTrigger asChild>
             <FormItem className="flex flex-row items-center space-y-0 justify-between px-1">
-              <FormLabel className="text-sm font-medium text-fg1">Response modalities</FormLabel>
+              <FormLabel className="text-sm font-medium text-fg1">响应模态</FormLabel>
               <div className="text-sm text-fg2 cursor-help">
                 {modalities.find(m => m.id === field.value)?.name || field.value}
               </div>
@@ -38,7 +38,7 @@ export function ModalitiesSelector({
             className="w-[260px] text-sm"
             side="right"
           >
-            The set of modalities the model can respond with.
+            模型可用于回复的模态组合。
           </HoverCardContent>
         </HoverCard>
       )}

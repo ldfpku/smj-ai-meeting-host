@@ -60,7 +60,7 @@ export function InstructionsEditor({
       onChange={handleInputChange}
       onFocus={onFocus}
       onBlur={handleBlur}
-      placeholder="Enter system instructions"
+      placeholder="请输入系统指令"
       className="w-full rounded outline-none font-mono text-xs leading-loose bg-transparent"
       rows={4}
     />

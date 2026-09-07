@@ -27,7 +27,7 @@ export function PresetSave() {
   useEffect(() => {
     setName(
       selectedPreset?.defaultGroup
-        ? `${selectedPreset.name} (copy)`
+        ? `${selectedPreset.name}（副本）`
         : selectedPreset?.name || "",
     );
     setDescription(selectedPreset?.description || "");
@@ -59,20 +59,19 @@ export function PresetSave() {
       <DialogTrigger asChild>
         <Button size="sm" variant="secondary">
           <Save className="w-4 h-4" />
-          <span className="md:ml-2 hidden md:block">Save</span>
+          <span className="md:ml-2 hidden md:block">保存</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[475px]">
         <DialogHeader>
-          <DialogTitle>Save preset</DialogTitle>
+          <DialogTitle>保存预设</DialogTitle>
           <DialogDescription>
-            This will save the current playground settings so you can access it
-            later.
+            将当前演练场的设置保存为预设，方便日后随时调用。
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
-            <Label htmlFor="name">Name</Label>
+            <Label htmlFor="name">名称</Label>
             <Input
               id="name"
               autoFocus
@@ -82,7 +81,7 @@ export function PresetSave() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="description">Description</Label>
+            <Label htmlFor="description">描述</Label>
             <Input
               id="description"
               value={description}
@@ -96,7 +95,7 @@ export function PresetSave() {
             onClick={handleSave}
             className="text-sm font-semibold"
           >
-            Save
+            保存
           </Button>
         </DialogFooter>
       </DialogContent>

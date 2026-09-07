@@ -1,9 +1,7 @@
 "use client";
 
-import { CodeViewer } from "@/components/code-viewer";
 import { PresetSave } from "@/components/preset-save";
 import { PresetSelector } from "@/components/preset-selector";
-import { PresetShare } from "@/components/preset-share";
 
 export function Header() {
   return (
@@ -13,11 +11,10 @@ export function Header() {
           <div className="flex flex-row items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold">
-                Live API Playground
+                AI 会议主持人
               </h2>
               <p className="text-sm text-gray-500">
-                Try Google&apos;s new Gemini 2.5 Live API right from
-                your browser.
+                装载公司标准会议模板，控时、纠偏、点名征询、催办四要素决议。
               </p>
             </div>
           </div>
@@ -26,8 +23,6 @@ export function Header() {
           <div className="flex flex-row items-center space-x-2">
             <PresetSelector />
             <PresetSave />
-            <PresetShare />
-            <CodeViewer />
           </div>
         </div>
       </div>

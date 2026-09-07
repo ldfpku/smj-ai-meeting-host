@@ -13,17 +13,17 @@ export interface Modalities {
 export const modalities: Modalities[] = [
   {
     id: ModalitiesId.TEXT_AND_AUDIO,
-    name: "Audio + Text",
-    description: "The model will produce both audio and text.",
+    name: "文本与语音",
+    description: "模型将同时输出语音和文本。",
   },
   {
     id: ModalitiesId.TEXT_ONLY,
-    name: "Text Only",
-    description: "The model will produce text only.",
+    name: "仅文本",
+    description: "模型将仅输出文本。",
   },
   {
     id: ModalitiesId.AUDIO_ONLY,
-    name: "Audio Only",
-    description: "The model will produce audio only.",
+    name: "仅语音",
+    description: "模型将仅输出语音。",
   },
 ];

@@ -45,8 +45,7 @@ export function TopPSelector({ defaultValue }: TopPSelectorProps) {
           className="w-[260px] text-sm"
           side="left"
         >
-          Control diversity via nucleus sampling: 0.5 means half of all
-          likelihood-weighted options are considered.
+          通过核采样控制多样性：0.5 表示只考虑一半按概率加权的候选项。
         </HoverCardContent>
       </HoverCard>
     </div>

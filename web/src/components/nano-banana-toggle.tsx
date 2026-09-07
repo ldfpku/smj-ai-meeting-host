@@ -34,7 +34,7 @@ export function NanoBananaToggle({ form }: ConfigurationFormFieldProps) {
                   <Switch
                     checked={field.value}
                     onCheckedChange={field.onChange}
-                    aria-label="Enable Nano Banana image generation"
+                    aria-label="启用 Nano Banana 图像生成"
                   />
                 </FormControl>
               </div>
@@ -45,10 +45,9 @@ export function NanoBananaToggle({ form }: ConfigurationFormFieldProps) {
               side="right"
             >
               <div className="space-y-2">
-                <p className="font-semibold text-fg0">Imagen 4 Integration</p>
+                <p className="font-semibold text-fg0">Imagen 4 集成</p>
                 <p className="text-fg2">
-                  Generate images using Google&apos;s Imagen 4 model. When enabled, 
-                  the agent can create visual content in response to your requests.
+                  使用 Google Imagen 4 模型生成图像。启用后，主持人可以根据你的需求创建可视内容。
                 </p>
               </div>
             </HoverCardContent>

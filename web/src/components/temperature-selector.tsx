@@ -48,7 +48,7 @@ export function TemperatureSelector({
             <HoverCardTrigger asChild>
               <FormItem className="px-1">
                 <div className="flex items-center justify-between">
-                  <FormLabel className="text-sm font-medium text-fg1">Temperature</FormLabel>
+                  <FormLabel className="text-sm font-medium text-fg1">温度</FormLabel>
                   <FormControl>
                     <Input
                       {...field}
@@ -66,14 +66,13 @@ export function TemperatureSelector({
                     onValueChange={(v) => field.onChange(v[0])}
                     value={[field.value]}
                     className="pt-2 [&_[role=slider]]:h-4 [&_[role=slider]]:w-4"
-                    aria-label="Temperature"
+                    aria-label="温度"
                   />
                 </FormControl>
               </FormItem>
             </HoverCardTrigger>
             <HoverCardContent align="start" className="w-[260px] text-sm" side="right">
-              Adjust the randomness of the response. Lowering the temperature
-              will make the response more deterministic and repetitive.
+              调整回复的随机程度。降低温度会让回复更确定、更趋于重复。
             </HoverCardContent>
           </HoverCard>
         )}

@@ -41,6 +41,9 @@ const defaultInitialMeetingLiveState: MeetingLiveState = {
   startTime: null,
   elapsedSeconds: 0,
   decisions: [],
+  openItems: [],
+  calledAttendeeIds: [],
+  spokenAttendeeIds: [],
   isFinished: false,
   driftWarning: false,
 };
@@ -84,18 +87,47 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
           console.log("Meeting update received:", data);
           setMeetingLiveState((prev) => {
             if (data.type === "new_decision") {
-              const exists = prev.decisions.some((d) => d.id === data.decision.id);
+              // upsert：主持人补齐四要素后会用同一 id 再发一次
+              const idx = prev.decisions.findIndex(
+                (d) => d.id === data.decision.id
+              );
+              if (idx === -1) {
+                return {
+                  ...prev,
+                  decisions: [...prev.decisions, data.decision],
+                };
+              }
+              const next = [...prev.decisions];
+              next[idx] = data.decision;
+              return { ...prev, decisions: next };
+            }
+            if (data.type === "new_open_item") {
+              const exists = prev.openItems.some(
+                (o) => o.id === data.openItem.id
+              );
               if (exists) return prev;
               return {
                 ...prev,
-                decisions: [...prev.decisions, data.decision],
+                openItems: [...prev.openItems, data.openItem],
+              };
+            }
+            if (data.type === "roll_call") {
+              // 主持人点名了某位参会人：看板高亮，等待其表态
+              const id: string | undefined = data.attendeeId;
+              if (!id || prev.calledAttendeeIds.includes(id)) return prev;
+              return {
+                ...prev,
+                calledAttendeeIds: [...prev.calledAttendeeIds, id],
               };
             }
             if (data.type === "advance_agenda") {
+              // 换议题即重置本议题的点名/发言记录
               return {
                 ...prev,
                 currentAgendaIndex: data.currentAgendaIndex,
                 driftWarning: false,
+                calledAttendeeIds: [],
+                spokenAttendeeIds: [],
               };
             }
             if (data.type === "drift_warning") {
@@ -180,7 +212,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         console.log('Byte stream received:', reader.info);
         
         // Get the prompt from attributes
-        const prompt = reader.info.attributes?.prompt || 'Generated image';
+        const prompt = reader.info.attributes?.prompt || '生成的图像';
         const timestamp = reader.info.timestamp || Date.now();
         
         // Read all chunks from the stream

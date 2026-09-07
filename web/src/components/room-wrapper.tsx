@@ -28,7 +28,7 @@ export function RoomWrapper({ children }: { children: ReactNode }) {
       <AgentProvider>
         {children}
         <RoomAudioRenderer />
-        <StartAudio label="Click to allow audio playback" />
+        <StartAudio label="点击以允许播放音频" />
       </AgentProvider>
     </LiveKitRoom>
   );

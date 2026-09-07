@@ -16,7 +16,7 @@ import { ChatControls } from "@/components/chat-controls";
 import { useAgent } from "@/hooks/use-agent";
 import { useConnection } from "@/hooks/use-connection";
 import { toast } from "@/hooks/use-toast";
-import { GeminiVisualizer } from "@/components/visualizer/gemini-visualizer";
+import { SmjarVisualizer } from "@/components/visualizer/smjar-visualizer";
 import { NanoBananaFeed } from "@/components/nano-banana-feed";
 import { MeetingKanban } from "@/components/meeting/meeting-kanban";
 import { MeetingConfigModal } from "@/components/meeting/meeting-config-modal";
@@ -32,25 +32,39 @@ export function Chat() {
   const { pgState } = usePlaygroundState();
   const [isEditingInstructions, setIsEditingInstructions] = useState(false);
   const [showMeetingConfigModal, setShowMeetingConfigModal] = useState(false);
-  const isMeetingPreset = pgState.selectedPresetId === "meeting-moderator";
+  // 以「是否配置了会议」为准，而非预设 id：把会议配置挂到别的预设上时也应渲染看板
+  const isMeetingPreset = !!pgState.sessionConfig.meetingConfig;
   const room = useRoomContext();
 
   const handleForceIntervene = async () => {
     playAttentionChime();
+    // performRpc 需要具体的目标身份；此前传空串会直接抛错并被吞掉，
+    // 结果是按钮看似生效、agent 端其实从未收到。
+    if (!room?.localParticipant || !agent?.identity) {
+      toast({
+        title: "主持人尚未就位",
+        description: "AI 主持人还没有连接到会议，请稍候重试。",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
-      if (room?.localParticipant) {
-        await room.localParticipant.performRpc({
-          destinationIdentity: "",
-          method: "pg.forceIntervene",
-          payload: JSON.stringify({ reason: "参会人手动呼叫主持人介入纠偏" }),
-        });
-      }
+      await room.localParticipant.performRpc({
+        destinationIdentity: agent.identity,
+        method: "pg.forceIntervene",
+        payload: JSON.stringify({ reason: "参会人手动呼叫主持人介入纠偏" }),
+      });
       toast({
         title: "已呼叫主持人即刻介入",
         description: "AI 主持人将强行打断发言并收拢全场讨论。",
       });
     } catch (err) {
-      console.log("forceIntervene RPC error", err);
+      console.error("forceIntervene RPC failed", err);
+      toast({
+        title: "呼叫主持人失败",
+        description: "未能把纠偏指令送达 AI 主持人，请重试。",
+        variant: "destructive",
+      });
     }
   };
 
@@ -66,9 +80,8 @@ export function Chat() {
         setHasSeenAgent(false);
 
         toast({
-          title: "Agent Unavailable",
-          description:
-            "Unable to connect to an agent right now. Please try again later.",
+          title: "主持人不可用",
+          description: "当前无法连接到 AI 主持人，请稍后重试。",
           variant: "destructive",
         });
       }, 5000);
@@ -91,9 +104,8 @@ export function Chat() {
         }
 
         toast({
-          title: "Agent Disconnected",
-          description:
-            "The AI agent has unexpectedly left the conversation. Please try again.",
+          title: "主持人已断开",
+          description: "AI 主持人意外离开了会话，请重试。",
           variant: "destructive",
         });
       }, 5000);
@@ -115,7 +127,7 @@ export function Chat() {
   const renderVisualizer = () => (
     <div className="flex w-full items-center">
       <div className="h-[280px] lg:h-[400px] mt-16 md:mt-0 lg:pb-24 w-full">
-        <GeminiVisualizer 
+        <SmjarVisualizer 
           key={audioTrack?.publication?.trackSid || 'no-track'} 
           agentState={state} 
           agentTrackRef={audioTrack} 
@@ -184,7 +196,22 @@ export function Chat() {
                     config={pgState.sessionConfig.meetingConfig || defaultMeetingConfig}
                     liveState={meetingLiveState}
                     onAdvanceAgenda={(nextIdx) =>
-                      updateMeetingLiveState({ currentAgendaIndex: nextIdx })
+                      updateMeetingLiveState({
+                        currentAgendaIndex: nextIdx,
+                        calledAttendeeIds: [],
+                        spokenAttendeeIds: [],
+                      })
+                    }
+                    onToggleSpoken={(attendeeId) =>
+                      updateMeetingLiveState({
+                        spokenAttendeeIds: meetingLiveState.spokenAttendeeIds.includes(
+                          attendeeId
+                        )
+                          ? meetingLiveState.spokenAttendeeIds.filter(
+                              (id) => id !== attendeeId
+                            )
+                          : [...meetingLiveState.spokenAttendeeIds, attendeeId],
+                      })
                     }
                     onOpenConfigModal={() => setShowMeetingConfigModal(true)}
                     isConnectingOrConnected={
@@ -211,7 +238,22 @@ export function Chat() {
                     config={pgState.sessionConfig.meetingConfig || defaultMeetingConfig}
                     liveState={meetingLiveState}
                     onAdvanceAgenda={(nextIdx) =>
-                      updateMeetingLiveState({ currentAgendaIndex: nextIdx })
+                      updateMeetingLiveState({
+                        currentAgendaIndex: nextIdx,
+                        calledAttendeeIds: [],
+                        spokenAttendeeIds: [],
+                      })
+                    }
+                    onToggleSpoken={(attendeeId) =>
+                      updateMeetingLiveState({
+                        spokenAttendeeIds: meetingLiveState.spokenAttendeeIds.includes(
+                          attendeeId
+                        )
+                          ? meetingLiveState.spokenAttendeeIds.filter(
+                              (id) => id !== attendeeId
+                            )
+                          : [...meetingLiveState.spokenAttendeeIds, attendeeId],
+                      })
                     }
                     onOpenConfigModal={() => setShowMeetingConfigModal(true)}
                     isConnectingOrConnected={

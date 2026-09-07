@@ -27,7 +27,7 @@ export function ModelSelector({ form, ...props }: ConfigurationFormFieldProps) {
       render={({ field }) => (
         <FormItem className="flex flex-row items-center space-y-0 justify-between px-1">
           <div className="flex items-center gap-2">
-            <FormLabel className="text-sm font-medium text-fg1">Model</FormLabel>
+            <FormLabel className="text-sm font-medium text-fg1">模型</FormLabel>
             <ModelsShowcase 
               onSelectModel={(modelId) => {
                 field.onChange(modelId);
@@ -55,7 +55,7 @@ export function ModelSelector({ form, ...props }: ConfigurationFormFieldProps) {
                   <p className="text-fg2">{modelsData[field.value].description}</p>
                 </div>
               ) : (
-                <p>Choose a Gemini live API model</p>
+                <p>选择一个 Gemini Live API 模型</p>
               )}
             </HoverCardContent>
           </HoverCard>

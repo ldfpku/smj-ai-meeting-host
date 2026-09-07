@@ -31,9 +31,9 @@ export function ModelsShowcase({ onSelectModel, currentModel, onOpenChange }: Mo
 
   const getCategoryDescription = (category: ModelCategory) => {
     if (category === ModelCategory.NATIVE_AUDIO) {
-      return "Most natural speech with emotion-aware dialogue, proactive audio, and thinking capabilities";
+      return "语音最自然，支持情绪感知对话、主动发声与思考能力";
     }
-    return "Cascaded architecture with better performance and reliability for production, especially with tool use";
+    return "级联架构，在生产环境中性能与可靠性更佳，尤其适合工具调用场景";
   };
 
   return (
@@ -43,7 +43,7 @@ export function ModelsShowcase({ onSelectModel, currentModel, onOpenChange }: Mo
           variant="ghost"
           size="icon"
           className="h-8 w-8"
-          aria-label="View all models"
+          aria-label="查看全部模型"
         >
           <Info className="h-4 w-4" />
         </Button>
@@ -52,10 +52,10 @@ export function ModelsShowcase({ onSelectModel, currentModel, onOpenChange }: Mo
         <div className="px-6 py-5 border-b border-separator1">
           <DialogHeader>
             <DialogTitle className="text-2xl font-semibold text-fg0">
-              Available Models
+              可用模型
             </DialogTitle>
             <DialogDescription className="text-base text-fg1 mt-2">
-              Choose from {models.length} Gemini models optimized for live interactions.
+              从 {models.length} 个为实时交互优化的 Gemini 模型中选择。
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -98,7 +98,7 @@ export function ModelsShowcase({ onSelectModel, currentModel, onOpenChange }: Mo
                               {model.isNew && (
                                 <Badge variant="default" className="text-xs gap-1 bg-fgAccent1 text-bg0">
                                   <Sparkles className="h-3 w-3" />
-                                  NEW
+                                  新
                                 </Badge>
                               )}
                             </div>
@@ -121,8 +121,8 @@ export function ModelsShowcase({ onSelectModel, currentModel, onOpenChange }: Mo
 
         <div className="px-6 py-4 border-t border-separator1 bg-bg1">
           <p className="text-xs text-fg2">
-            <span className="font-semibold">Tip:</span> Native audio models provide the most natural speech but may have higher latency. 
-            Half-cascade models are optimized for production use with tools.
+            <span className="font-semibold">提示：</span>原生音频模型的语音最自然，但延迟可能更高；
+            半级联模型针对使用工具的生产场景做了优化。
           </p>
         </div>
       </DialogContent>

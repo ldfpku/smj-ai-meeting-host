@@ -5,7 +5,7 @@ export enum ModelId {
 }
 
 export enum ModelCategory {
-  NATIVE_AUDIO = "Native Audio",
+  NATIVE_AUDIO = "原生语音",
 }
 
 export interface Model {
@@ -20,14 +20,14 @@ export const modelsData: Record<ModelId, Model> = {
   [ModelId.GEMINI_3_1_FLASH_LIVE_PREVIEW]: {
     id: ModelId.GEMINI_3_1_FLASH_LIVE_PREVIEW,
     name: "Gemini 3.1 Flash Live",
-    description: "Ultra-low latency real-time voice & multimodal dialogue",
+    description: "超低延迟的实时语音与多模态对话",
     category: ModelCategory.NATIVE_AUDIO,
     isNew: true,
   },
   [ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_09_2025]: {
     id: ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_09_2025,
     name: "Gemini 2.5 Flash Native Audio",
-    description: "Natural speech with emotion-aware dialogue and thinking (09/2025)",
+    description: "自然语音，支持情绪感知对话与思考（2025 年 9 月版）",
     category: ModelCategory.NATIVE_AUDIO,
     isNew: false,
   },

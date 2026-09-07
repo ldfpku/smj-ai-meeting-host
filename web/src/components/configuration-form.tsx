@@ -127,14 +127,14 @@ export function ConfigurationForm() {
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         toast({
-          title: "Reconnected",
-          description: "Session reconnected with new settings.",
+          title: "已重新连接",
+          description: "会话已按新设置重新连接。",
           variant: "success",
         });
       } catch (e) {
         toast({
-          title: "Reconnection failed",
-          description: "Failed to reconnect. Please try manually.",
+          title: "重新连接失败",
+          description: "无法重新连接，请手动重试。",
           variant: "destructive",
         });
       } finally {
@@ -156,15 +156,14 @@ export function ConfigurationForm() {
       let responseObj = JSON.parse(response);
       if (responseObj.changed) {
         toast({
-          title: "Configuration updated",
+          title: "配置已更新",
           variant: "success",
         });
       }
     } catch (e) {
       toast({
-        title: "Error Updating Configuration",
-        description:
-          "There was an error updating your configuration. Please try again.",
+        title: "更新配置出错",
+        description: "更新配置时发生错误，请重试。",
         variant: "destructive",
       });
     }
@@ -223,7 +222,7 @@ export function ConfigurationForm() {
         <div className="flex flex-col h-full">
           <div className="flex-shrink-0 py-4 px-1 border-b border-separator1">
             <div className="text-xs font-bold uppercase tracking-widest text-fg0">
-              Configuration
+              配置
             </div>
           </div>
           <div className="flex-grow overflow-y-auto py-4 pt-4">

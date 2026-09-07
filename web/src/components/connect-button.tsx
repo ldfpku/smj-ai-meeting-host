@@ -61,12 +61,12 @@ export function ConnectButton() {
           {connecting || shouldConnect ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Connecting
+              连接中
             </>
           ) : (
             <>
               <PhoneCall className="h-4 w-4 mr-2" />
-              Start a conversation with Gemini
+              开始与主持人对话
             </>
           )}
         </Button>
@@ -76,7 +76,7 @@ export function ConnectButton() {
             variant="outline"
             size="icon"
             className="h-9 w-9"
-            title="Change API Key"
+            title="更换 API 密钥"
           >
             <Settings className="h-4 w-4" />
           </Button>

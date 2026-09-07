@@ -35,3 +35,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# 音色试听音频缓存（由 /api/voice-preview 生成）
+.cache/

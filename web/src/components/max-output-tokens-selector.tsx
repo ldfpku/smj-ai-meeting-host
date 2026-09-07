@@ -30,7 +30,7 @@ export function MaxOutputTokensSelector({
           <HoverCardTrigger asChild>
             <FormItem className="space-y-2 px-1">
               <div className="flex items-center justify-between">
-                <FormLabel className="text-sm font-medium text-fg1">Max output tokens</FormLabel>
+                <FormLabel className="text-sm font-medium text-fg1">最大输出 Token</FormLabel>
                 <FormControl>
                   <Input
                     {...field}
@@ -46,7 +46,7 @@ export function MaxOutputTokensSelector({
                       field.onChange(value);
                     }}
                     className="w-[100px]"
-                    placeholder="No limit"
+                    placeholder="不限"
                   />
                 </FormControl>
               </div>
@@ -58,8 +58,7 @@ export function MaxOutputTokensSelector({
             className="w-[260px] text-sm"
             side="right"
           >
-            The maximum number of tokens used in each response output. Leave
-            empty for no limit.
+            每次回复输出所使用的最大 Token 数。留空表示不限。
           </HoverCardContent>
         </HoverCard>
       )}

@@ -1,21 +1,20 @@
 import { Metadata } from "next";
-import { GitHubLogoIcon } from "@radix-ui/react-icons";
+import Image from "next/image";
+
 import { Chat } from "@/components/chat";
-import Heart from "@/assets/heart.svg";
+
 import { defaultPresets } from "@/data/presets";
-import { CodeViewer } from "@/components/code-viewer";
 import { PresetSave } from "@/components/preset-save";
 import { PresetSelector } from "@/components/preset-selector";
-import { PresetShare } from "@/components/preset-share";
 
 export async function generateMetadata({
   searchParams,
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }): Promise<Metadata> {
-  let title = "LiveKit | Gemini Live API Playground";
+  let title = "SMJAR | AI 会议主持人";
   let description =
-    "Speech-to-speech playground for Google's new Gemini Live API. Built on LiveKit Agents";
+    "SMJAR 会议制度执行器：装载公司真实会议模板，严格控时、跑题即刻打断、按名单点名征询、催办四要素决议并生成正式纪要。";
 
   const params = await searchParams;
   const presetId = params?.preset;
@@ -24,28 +23,21 @@ export async function generateMetadata({
       (preset) => preset.id === presetId
     );
     if (selectedPreset) {
-      title = `Gemini Live API Playground`;
-      description = `Speak to a "${selectedPreset.name}" in a speech-to-speech playground for Gemini's new Live API. Built on LiveKitAgents.`;
+      title = `SMJAR | ${selectedPreset.name}`;
+      description = `与「${selectedPreset.name}」实时语音对话。SMJAR 内部工具。`;
     }
   }
 
   return {
     title,
     description,
+    icons: {
+      icon: [{ url: "/static/brand/favicon.webp", type: "image/webp" }],
+    },
     openGraph: {
       title,
       description,
       type: "website",
-      url: "https://gemini-playground-xi.vercel.app/",
-      images: [
-        {
-          url: "https://gemini-playground-xi.vercel.app/og-image.png",
-          width: 1200,
-          height: 676,
-          type: "image/png",
-          alt: title,
-        },
-      ],
     },
   };
 }
@@ -56,14 +48,12 @@ export default function Dashboard() {
       <header className="flex flex-col md:flex-row flex-shrink-0 gap-3 md:h-16 items-center justify-between px-4 md:px-8 py-4 w-full border-b border-separator1 min-w-0">
         <div className="flex items-center min-w-0 flex-shrink">
           <span className="text-lg font-light truncate">
-            Gemini Live API Playground
+            AI 会议主持人
           </span>
         </div>
         <div className="inline-flex flex-row items-center space-x-2 flex-shrink-0">
           <PresetSelector />
           <PresetSave />
-          <PresetShare />
-          <CodeViewer />
         </div>
       </header>
       <main className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden p-4 w-full">
@@ -71,29 +61,27 @@ export default function Dashboard() {
           <Chat />
         </div>
       </main>
-      <footer className="hidden md:flex md:items-center md:gap-2 md:justify-end font-mono uppercase text-right py-3 px-8 text-xs text-fg3 w-full border-t border-separator1">
-        Built with
-        <Heart />
-        on
-        <a
-          href="https://github.com/livekit/agents"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline"
-        >
-          LiveKit Agents
-        </a>{" "}
-        •
-        <a
-          href="https://github.com/livekit-examples/gemini-playground"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline inline-flex items-center gap-1"
-        >
-          <GitHubLogoIcon className="h-4 w-4" />
-          View source on GitHub
-        </a>
-        • © 2025 LiveKit
+      <footer className="hidden md:flex md:items-center md:justify-between gap-4 py-3 px-8 text-xs text-fg3 w-full border-t border-separator1">
+        <div className="flex items-center gap-2 min-w-0">
+          <Image
+            src="/static/brand/logo-mark.webp"
+            alt=""
+            aria-hidden
+            width={16}
+            height={16}
+            className="h-4 w-4 object-contain opacity-90"
+          />
+          <span className="font-medium text-fg2">SMJAR</span>
+          <span className="text-separator1">|</span>
+          <span className="truncate">井下工具 · 制造 / 租赁 / 维保</span>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="hidden lg:inline">
+            天津 · 成都 · 新疆 · 惠州
+          </span>
+          <span className="hidden lg:inline text-separator1">|</span>
+          <span className="text-fg2">内部资料 · 请勿外传</span>
+        </div>
       </footer>
     </div>
   );

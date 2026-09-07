@@ -21,12 +21,12 @@ export function Instructions() {
 
   return (
     <div
-      className={`flex flex-1 flex-col w-full min-w-0 gap-[4px] text-neutral-300 bg-neutral-950  shadow-md p-4 rounded-lg overflow-y-auto overflow-x-hidden`}
+      className={`flex flex-1 flex-col w-full min-w-0 gap-[4px] text-brand-fg bg-brand-surface border border-brand-border shadow-sm p-4 rounded-lg overflow-y-auto overflow-x-hidden`}
     >
       <div className="flex justify-between items-center mb-2">
         <div className="flex items-center">
           <div className="text-xs font-semibold uppercase mr-1 tracking-widest">
-            INSTRUCTIONS
+            系统指令
           </div>
           <HoverCard open={isOpen}>
             <HoverCardTrigger asChild>
@@ -40,13 +40,11 @@ export function Instructions() {
               side="bottom"
               onInteractOutside={() => setIsOpen(false)}
             >
-              Instructions are a system message that is prepended to the
-              conversation whenever the model responds. Updates will be
-              reflected on the next conversation turn.
+              系统指令是一段系统消息，模型每次响应前都会把它置于对话最前面。修改后将在下一轮对话中生效。
               {immutablePrompt && (
                 <>
                   <br /><br />
-                  <strong>Note:</strong> Nano Banana adds additional instructions for image generation.
+                  <strong>注意：</strong>Nano Banana 会为图像生成追加额外指令。
                 </>
               )}
             </HoverCardContent>
@@ -64,17 +62,17 @@ export function Instructions() {
         <div className="mt-2">
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="flex items-center gap-1 text-xs text-neutral-400 hover:text-neutral-300 transition-colors"
+            className="flex items-center gap-1 text-xs text-brand-fg/70 hover:text-brand-fg transition-colors"
           >
             {isExpanded ? (
               <ChevronDown className="h-3 w-3" />
             ) : (
               <ChevronRight className="h-3 w-3" />
             )}
-            <span>Nano Banana Instructions Included</span>
+            <span>已包含 Nano Banana 追加指令</span>
           </button>
           {isExpanded && (
-            <div className="mt-2 p-2 text-xs font-mono leading-loose text-neutral-500 whitespace-pre-wrap">
+            <div className="mt-2 p-2 text-xs font-mono leading-loose text-brand-fg/60 whitespace-pre-wrap">
               {immutablePrompt}
             </div>
           )}

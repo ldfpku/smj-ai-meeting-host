@@ -25,10 +25,9 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { ellipsisMiddle } from "@/lib/utils";
-import { GitHubLogoIcon } from "@radix-ui/react-icons";
 
 const AuthFormSchema = z.object({
-  geminiAPIKey: z.string().min(1, { message: "API key is required" }),
+  geminiAPIKey: z.string().min(1, { message: "请填写 API 密钥" }),
 });
 
 export function Auth() {
@@ -48,13 +47,13 @@ export function Auth() {
       {pgState.geminiAPIKey && (
         <div className="text-xs flex gap-2 items-center">
           <span className="font-semibold text-neutral-400">
-            Using Gemini API Key
+            当前使用的 Gemini API 密钥
           </span>
           <div className="py-1 px-2 rounded-md bg-neutral-200 text-neutral-600">
             {ellipsisMiddle(pgState.geminiAPIKey, 4, 4)}
           </div>
           <a className="hover:underline cursor-pointer" onClick={onLogout}>
-            Clear
+            清除
           </a>
         </div>
       )}
@@ -109,34 +108,22 @@ export function AuthDialog({
                 className="flex flex-col gap-4"
               >
                 <DialogHeader className="gap-2">
-                  <DialogTitle>
-                    Gemini 2.5 Live API Playground
-                  </DialogTitle>
+                  <DialogTitle>SMJAR · AI 会议主持人</DialogTitle>
                   <DialogDescription>
-                    Try out Google&apos;s new Gemini 2.5 Live API
-                    right from your browser with this playground built on{" "}
-                    <Link
-                      href="https://github.com/livekit/agents"
-                      target="_blank"
-                      className="underline"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      LiveKit Agents
-                    </Link>
-                    .
+                    公司会议的 AI 主持助手：按标准会议模板控时、纠偏跑题、点名征询意见、
+                    催办带齐四要素的决议，并生成可回执确认的会议纪要。
                   </DialogDescription>
                   <DialogDescription>
-                    You must have a valid{" "}
+                    你需要一个有效的{" "}
                     <Link
                       href="https://aistudio.google.com/app/apikey"
                       target="_blank"
                       className="underline text-gemini-blue"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      Gemini API key
-                    </Link>{" "}
-                    to connect the playground to your own Gemini platform
-                    account.
+                      Gemini API 密钥
+                    </Link>
+                    ，语音主持与音色试听都通过它调用。密钥只保存在你本机浏览器中。
                   </DialogDescription>
                 </DialogHeader>
                 <div className="bg-black/10 h-[1px] w-full" />
@@ -147,14 +134,14 @@ export function AuthDialog({
                     <FormItem>
                       <div className="flex flex-col gap-2">
                         <FormLabel className="font-semibold text-sm whitespace-nowrap">
-                          Enter your{" "}
+                          请输入你的{" "}
                           <Link
                             href="https://aistudio.google.com/app/apikey"
                             target="_blank"
                             className="inline-flex items-center text-gemini-blue underline"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            Gemini API Key
+                            Gemini API 密钥
                             <ArrowUpRight className="h-4 w-4 ml-1" />
                           </Link>
                         </FormLabel>
@@ -162,7 +149,7 @@ export function AuthDialog({
                           <FormControl className="w-full">
                             <Input
                               className="w-full h-9"
-                              placeholder="Gemini API Key"
+                              placeholder="Gemini API 密钥"
                               {...field}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
@@ -180,7 +167,7 @@ export function AuthDialog({
                               onSubmit(form.getValues());
                             }}
                           >
-                            Connect
+                            连接
                           </Button>
                         </div>
                       </div>
@@ -188,25 +175,12 @@ export function AuthDialog({
                     </FormItem>
                   )}
                 />
-                <div className="text-xs text-fg1 py-2 flex justify-between items-center">
-                  <div className="flex items-center gap-2 flex-1">
+                <div className="text-xs text-fg1 py-2">
+                  <div className="flex items-center gap-2">
                     <LockKeyhole className="h-3 w-3 flex-shrink-0" />
                     <span className="font-semibold">
-                      Your key is stored only in your browser&apos;s
-                      LocalStorage.
+                      你的密钥仅保存在本浏览器的 LocalStorage 中，不会上传。
                     </span>
-                  </div>
-
-                  <div className="flex items-center flex-1 justify-end">
-                    <a
-                      href="https://github.com/livekit-examples/gemini-playground"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline flex items-center gap-1"
-                    >
-                      <GitHubLogoIcon className="h-5 w-5" />
-                      View source on GitHub
-                    </a>
                   </div>
                 </div>
               </form>

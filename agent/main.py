@@ -196,7 +196,7 @@ def create_generate_image_tool(session_manager: SessionManager):
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "Creative, detailed, and sophisticated description of the image to generate (e.g., 'a cat eating a nano-banana in a fancy restaurant'), not simply a few words. Not a generic prompt such as 'image of a cat' or 'random image'."
+                    "description": "Detailed, specific description of the image to generate (e.g., 'a labelled cross-section diagram of a progressive cavity drilling motor power section, showing stator elastomer and rotor lobes'), not simply a few words. Not a generic prompt such as 'a diagram' or 'random image'."
                 }
             },
             "required": [
@@ -244,11 +244,31 @@ def create_generate_image_tool(session_manager: SessionManager):
     return generate_image
 
 
+#: 决议四要素——SMJ 要求每条决议都必须带齐，缺一不可（与前端 missingDecisionFields 保持一致）
+DECISION_REQUIRED_FIELDS = (
+    ("owner", "责任人"),
+    ("dueDate", "完成时限"),
+    ("verification", "验证方式"),
+    ("evidence", "关闭证据"),
+)
+
+
+def _is_blank(value) -> bool:
+    if not isinstance(value, str):
+        return not value
+    stripped = value.strip()
+    return not stripped or stripped == "待定"
+
+
+def missing_decision_fields(decision: dict) -> list[str]:
+    return [label for key, label in DECISION_REQUIRED_FIELDS if _is_blank(decision.get(key))]
+
+
 def create_get_meeting_timer_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
         "name": "get_meeting_timer",
-        "description": "获取当前会议的已用时长、剩余时长、总计划时间以及当前正在讨论的议题信息。",
+        "description": "获取当前会议的已用时长、剩余时长、总计划时间、当前议题，以及本议题尚未点名表态的必须发言人、要素不全的决议清单。",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -266,17 +286,45 @@ def create_get_meeting_timer_tool(session_manager: SessionManager):
         agendas = cfg.get("agendas", [])
         idx = session_manager.current_agenda_index
 
+        parts: list[str] = []
         if 0 <= idx < len(agendas):
             cur = agendas[idx]
             cur_title = cur.get("title", f"议题 {idx + 1}")
             cur_duration = cur.get("durationMinutes", 0)
             cur_goal = cur.get("goal", "")
-            return (
+            parts.append(
                 f"会议已进行 {elapsed_mins}分{rem_secs}秒 (总预计 {total_mins} 分钟)。"
                 f"当前进行第 {idx + 1}/{len(agendas)} 项议题：【{cur_title}】"
                 f"(计划用时 {cur_duration} 分钟，核心目标: {cur_goal})。"
             )
-        return f"会议已进行 {elapsed_mins}分{rem_secs}秒 (总预计 {total_mins} 分钟)。目前所有计划议程已讨论完毕。"
+        else:
+            parts.append(
+                f"会议已进行 {elapsed_mins}分{rem_secs}秒 (总预计 {total_mins} 分钟)。目前所有计划议程已讨论完毕。"
+            )
+
+        pending = session_manager.pending_required_speakers()
+        if pending:
+            names = "、".join(
+                (a.get("name") or a.get("role") or "未具名") for a in pending
+            )
+            parts.append(
+                f"本议题还有 {len(pending)} 位【必须发言】人员尚未点名征询：{names}。"
+                f"请在推进议题前逐一点名（调用 request_speaker）——沉默不等于同意。"
+            )
+
+        incomplete = session_manager.incomplete_decisions()
+        if incomplete:
+            details = "；".join(
+                f"「{d.get('decision', '')[:20]}」缺 {'、'.join(m)}" for d, m in incomplete
+            )
+            parts.append(
+                f"有 {len(incomplete)} 条决议要素不全：{details}。请当场追问补齐。"
+            )
+
+        if not session_manager.decisions_for_current_agenda() and not session_manager.open_items_for_current_agenda():
+            parts.append("当前议题尚未产生任何决议或未决事项，切勿让它空过。")
+
+        return " ".join(parts)
 
     return get_meeting_timer
 
@@ -310,11 +358,36 @@ def create_advance_agenda_tool(session_manager: SessionManager):
         except (ValueError, TypeError):
             item_index = 1
         summary = raw_arguments.get("summary", "")
-        target_idx = max(0, item_index - 1)
-        session_manager.current_agenda_index = target_idx
 
-        cfg = session_manager.current_config.meeting_config or {}
-        agendas = cfg.get("agendas", [])
+        # 议而不决闸门：当前议题既无决议也无未决事项时，不允许直接翻页
+        leaving_idx = session_manager.current_agenda_index
+        target_idx = session_manager.clamp_agenda_index(item_index)
+        if target_idx > leaving_idx:
+            has_decision = bool(session_manager.decisions_for_current_agenda())
+            has_open = bool(session_manager.open_items_for_current_agenda())
+            if not has_decision and not has_open:
+                return (
+                    f"【暂不推进】议题【{session_manager.current_agenda_title()}】"
+                    f"至今没有任何决议，也没有登记未决事项，属于典型的「议而不决」。"
+                    f"请先追问拍板结论并调用 record_decision（须带齐 责任人/完成时限/验证方式/关闭证据）；"
+                    f"若确实定不下来，就调用 record_open_item 记为未决事项并说明升级路径，"
+                    f"然后再调用 advance_agenda 推进。"
+                )
+            pending = session_manager.pending_required_speakers()
+            if pending:
+                names = "、".join(
+                    (a.get("name") or a.get("role") or "未具名") for a in pending
+                )
+                return (
+                    f"【暂不推进】还有 {len(pending)} 位【必须发言】人员没有被点名征询：{names}。"
+                    f"请先逐一调用 request_speaker 点名并听取表态——沉默不等于同意——再推进议题。"
+                )
+
+        session_manager.current_agenda_index = target_idx
+        # 换议题即清空本议题的点名记录
+        session_manager.called_attendee_ids = set()
+
+        agendas = session_manager.meeting_agendas()
 
         await session_manager.publish_meeting_data({
             "type": "advance_agenda",
@@ -322,8 +395,11 @@ def create_advance_agenda_tool(session_manager: SessionManager):
             "summary": summary,
         })
 
-        title = agendas[target_idx].get("title", f"议题 {item_index}") if 0 <= target_idx < len(agendas) else f"第 {item_index} 项"
-        return f"会议议程已更新至第 {item_index} 项：【{title}】。前台看板已同步更新。"
+        title = agendas[target_idx].get("title", f"议题 {target_idx + 1}") if 0 <= target_idx < len(agendas) else f"第 {target_idx + 1} 项"
+        note = ""
+        if target_idx != item_index - 1:
+            note = f"（请求的第 {item_index} 项超出议程范围，已定位到第 {target_idx + 1} 项）"
+        return f"会议议程已更新至第 {target_idx + 1} 项：【{title}】{note}。前台看板已同步更新。"
 
     return advance_agenda
 
@@ -332,7 +408,10 @@ def create_record_decision_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
         "name": "record_decision",
-        "description": "记录会议中达成的明确决议或 Action Item 待办事项，同步展示在前台看板和最终纪要中。",
+        "description": (
+            "记录会议中达成的明确决议或 Action Item，同步展示在前台看板和最终纪要中。"
+            "公司要求每条决议必须带齐四要素：责任人、完成时限、验证方式、关闭证据。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -346,11 +425,27 @@ def create_record_decision_tool(session_manager: SessionManager):
                 },
                 "owner": {
                     "type": "string",
-                    "description": "该事项的明确责任人/执行人（如'张三'、'前端团队'、'产品组'）",
+                    "description": "【四要素之一】明确到人的责任人姓名或岗位（如'杨部长'、'产品线经理'）",
                 },
                 "due_date": {
                     "type": "string",
-                    "description": "交付时间或截止日期（如'本周五'、'下周二前'、'9月15日'）",
+                    "description": "【四要素之一】完成时限（如'本周五'、'10月15日前'、'下次协同会前'）",
+                },
+                "verification": {
+                    "type": "string",
+                    "description": "【四要素之一】验证方式——用什么办法确认这件事真的做到了（如'首件鉴定合格'、'MES 工艺路线可查'、'账龄表复核'）",
+                },
+                "closure_evidence": {
+                    "type": "string",
+                    "description": "【四要素之一】关闭证据——拿什么作为闭环凭据（如'QHSE 首件鉴定报告'、'受控入档的图纸清单'、'回款到账流水'）",
+                },
+                "owner_dept": {
+                    "type": "string",
+                    "description": "归口部门（如'技术研发部'、'质量安全部'），依据决议内容判断",
+                },
+                "process_id": {
+                    "type": "string",
+                    "description": "关联的业务流程编号（M-01…H-06，如'P-01'、'Q-03'、'T-03'），无法判断则留空",
                 },
             },
             "required": ["decision"],
@@ -361,32 +456,195 @@ def create_record_decision_tool(session_manager: SessionManager):
     @function_tool(raw_schema=raw_schema)
     async def record_decision(raw_arguments: dict) -> str:
         decision_text = raw_arguments.get("decision", "")
-        cfg = session_manager.current_config.meeting_config or {}
-        agendas = cfg.get("agendas", [])
+        agendas = session_manager.meeting_agendas()
         idx = session_manager.current_agenda_index
         default_agenda_title = agendas[idx].get("title", "") if 0 <= idx < len(agendas) else "通用决议"
         agenda_title = raw_arguments.get("agenda_title") or default_agenda_title
-        owner = raw_arguments.get("owner") or "待定"
-        due_date = raw_arguments.get("due_date") or "待定"
+
+        # 补齐四要素时模型会带着同一条结论再调用一次：按「议题+结论文本」做 upsert，
+        # 复用原 id 覆盖，避免看板上出现两条内容相同、完整度不同的决议。
+        existing = next(
+            (
+                d
+                for d in session_manager.decisions
+                if d.get("agendaTitle") == agenda_title
+                and d.get("decision", "").strip() == decision_text.strip()
+            ),
+            None,
+        )
 
         decision_item = {
-            "id": f"dec-{uuid.uuid4().hex[:8]}",
+            "id": existing["id"] if existing else f"dec-{uuid.uuid4().hex[:8]}",
             "agendaTitle": agenda_title,
             "decision": decision_text,
-            "owner": owner,
-            "dueDate": due_date,
-            "timestamp": int(time.time() * 1000),
+            "owner": raw_arguments.get("owner") or "",
+            "dueDate": raw_arguments.get("due_date") or "",
+            "verification": raw_arguments.get("verification") or "",
+            "evidence": raw_arguments.get("closure_evidence") or "",
+            "ownerDept": raw_arguments.get("owner_dept") or "",
+            "processId": (raw_arguments.get("process_id") or "").strip().upper(),
+            "timestamp": existing["timestamp"] if existing else int(time.time() * 1000),
         }
-        session_manager.decisions.append(decision_item)
+        if existing:
+            session_manager.decisions[session_manager.decisions.index(existing)] = decision_item
+        else:
+            session_manager.decisions.append(decision_item)
 
         await session_manager.publish_meeting_data({
             "type": "new_decision",
             "decision": decision_item,
         })
 
-        return f"已成功固化决议：【{decision_text}】（议题：{agenda_title}，负责人：{owner}，完成时间：{due_date}），并已同步至前台看板。"
+        missing = missing_decision_fields(decision_item)
+        base = (
+            f"已记录决议：【{decision_text}】（议题：{agenda_title}，"
+            f"责任人：{decision_item['owner'] or '缺'}，"
+            f"完成时限：{decision_item['dueDate'] or '缺'}，"
+            f"验证方式：{decision_item['verification'] or '缺'}，"
+            f"关闭证据：{decision_item['evidence'] or '缺'}），已同步至前台看板。"
+        )
+        if missing:
+            return (
+                base
+                + f" 但该决议仍缺少四要素中的：{('、'.join(missing))}。"
+                f"请立即当场追问补齐，例如「这条由谁负责？什么时候完成？用什么方式验证？拿什么作为关闭证据？」，"
+                f"补齐后重新调用 record_decision 覆盖记录；若确实问不齐，改用 record_open_item 记为未决事项。"
+            )
+        return base + " 四要素齐全，请口头向全场复述确认一次。"
 
     return record_decision
+
+
+def create_record_open_item_tool(session_manager: SessionManager):
+    raw_schema = {
+        "type": "function",
+        "name": "record_open_item",
+        "description": (
+            "记录会上未能形成结论的未决事项，并写明升级路径。"
+            "凡是争执不下、缺数据、缺人、跨部门扯皮而定不了的事项，都必须登记，绝不能不了了之。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "issue": {
+                    "type": "string",
+                    "description": "未能拍板的事项内容",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "为什么没能当场定下来（如'缺上月账龄数据'、'需供应商确认交期'、'两个部门口径不一致'）",
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "会后跟进的责任人姓名或岗位",
+                },
+                "escalate_to": {
+                    "type": "string",
+                    "description": "升级路径（默认使用本次会议配置的升级路径，如'总经理签批并留档'）",
+                },
+                "agenda_title": {
+                    "type": "string",
+                    "description": "所属议题标题（可选，默认当前议题）",
+                },
+            },
+            "required": ["issue"],
+            "additionalProperties": False,
+        },
+    }
+
+    @function_tool(raw_schema=raw_schema)
+    async def record_open_item(raw_arguments: dict) -> str:
+        issue = raw_arguments.get("issue", "")
+        agenda_title = raw_arguments.get("agenda_title") or session_manager.current_agenda_title()
+        escalate_to = raw_arguments.get("escalate_to") or session_manager.escalation_path()
+
+        open_item = {
+            "id": f"open-{uuid.uuid4().hex[:8]}",
+            "agendaTitle": agenda_title,
+            "issue": issue,
+            "reason": raw_arguments.get("reason") or "",
+            "owner": raw_arguments.get("owner") or "",
+            "escalateTo": escalate_to,
+            "timestamp": int(time.time() * 1000),
+        }
+        session_manager.open_items.append(open_item)
+
+        await session_manager.publish_meeting_data({
+            "type": "new_open_item",
+            "openItem": open_item,
+        })
+
+        return (
+            f"已登记未决事项：【{issue}】（议题：{agenda_title}，跟进人：{open_item['owner'] or '待定'}，"
+            f"升级路径：{escalate_to}）。请口头明确宣布："
+            f"「这条今天定不了，记为未决事项，由{open_item['owner'] or '相关责任人'}跟进，升级到{escalate_to}。」"
+        )
+
+    return record_open_item
+
+
+def create_request_speaker_tool(session_manager: SessionManager):
+    raw_schema = {
+        "type": "function",
+        "name": "request_speaker",
+        "description": (
+            "点名征询某位参会人的意见，前台看板会高亮该参会人。"
+            "本公司参会人普遍不会主动表态，沉默不等于同意——议题收尾前必须对所有【必须发言】人员逐一点名。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "attendee_name": {
+                    "type": "string",
+                    "description": "要点名的参会人姓名或岗位，须来自会议参会人名单",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "点名征询的具体问题或角度（如'请从质量口径说明是否接受该让步'）",
+                },
+            },
+            "required": ["attendee_name"],
+            "additionalProperties": False,
+        },
+    }
+
+    @function_tool(raw_schema=raw_schema)
+    async def request_speaker(raw_arguments: dict) -> str:
+        name = raw_arguments.get("attendee_name", "")
+        reason = raw_arguments.get("reason") or ""
+        attendee = session_manager.find_attendee(name)
+
+        if attendee is None:
+            roster = session_manager.meeting_attendees()
+            known = "、".join(
+                (a.get("name") or a.get("role") or "") for a in roster if (a.get("name") or a.get("role"))
+            )
+            return (
+                f"参会人名单中没有找到「{name}」。"
+                + (f"当前名单为：{known}。请改用名单中的称呼点名。" if known else "本次会议尚未登记参会人名单，可直接口头点名。")
+            )
+
+        attendee_id = attendee.get("id", "")
+        session_manager.called_attendee_ids.add(attendee_id)
+
+        await session_manager.publish_meeting_data({
+            "type": "roll_call",
+            "attendeeId": attendee_id,
+            "attendeeName": attendee.get("name") or attendee.get("role") or name,
+            "reason": reason,
+        })
+
+        label = attendee.get("name") or attendee.get("role") or name
+        remaining = len(session_manager.pending_required_speakers())
+        return (
+            f"已在看板高亮点名 {label}。请立即开口征询："
+            f"「请{label}就本议题明确表个态"
+            + (f"，{reason}" if reason else "")
+            + "：你的意见是什么？有没有不同看法？」"
+            + (f" 本议题还剩 {remaining} 位必须发言人员未点名。" if remaining else " 本议题必须发言人员已全部点名。")
+        )
+
+    return request_speaker
 
 
 def create_warn_topic_drift_tool(session_manager: SessionManager):
@@ -399,7 +657,7 @@ def create_warn_topic_drift_tool(session_manager: SessionManager):
             "properties": {
                 "reason": {
                     "type": "string",
-                    "description": "讨论偏离当前主题的简要说明（例如：'正讨论上周复盘，但话题偏向了下季度团建规划'）",
+                    "description": "讨论偏离当前主题的简要说明（例如：'正在过瓶颈工序，话题却跑到了明年设备采购预算'）",
                 },
             },
             "required": ["reason"],
@@ -431,6 +689,8 @@ def create_meeting_tools(session_manager: SessionManager):
         create_get_meeting_timer_tool(session_manager),
         create_advance_agenda_tool(session_manager),
         create_record_decision_tool(session_manager),
+        create_record_open_item_tool(session_manager),
+        create_request_speaker_tool(session_manager),
         create_warn_topic_drift_tool(session_manager),
     ]
 
@@ -457,6 +717,8 @@ class SessionManager:
         self.meeting_start_time: float | None = None
         self.current_agenda_index: int = 0
         self.decisions: list[dict] = []
+        self.open_items: list[dict] = []
+        self.called_attendee_ids: set[str] = set()
         self.overtime_alerted: set[int] = set()
         self.monitor_task: asyncio.Task | None = None
 
@@ -464,6 +726,88 @@ class SessionManager:
         if self.meeting_start_time is None:
             return 0
         return int(time.time() - self.meeting_start_time)
+
+    # ---- meeting helpers -------------------------------------------------
+
+    def meeting_agendas(self) -> list[dict]:
+        cfg = self.current_config.meeting_config or {}
+        agendas = cfg.get("agendas", [])
+        return agendas if isinstance(agendas, list) else []
+
+    def meeting_attendees(self) -> list[dict]:
+        cfg = self.current_config.meeting_config or {}
+        attendees = cfg.get("attendees", [])
+        return attendees if isinstance(attendees, list) else []
+
+    def escalation_path(self) -> str:
+        cfg = self.current_config.meeting_config or {}
+        return cfg.get("escalationPath") or "提请总经理签批并留档"
+
+    def current_agenda_title(self) -> str:
+        agendas = self.meeting_agendas()
+        idx = self.current_agenda_index
+        if 0 <= idx < len(agendas):
+            return agendas[idx].get("title", f"议题 {idx + 1}")
+        return "当前议题"
+
+    def clamp_agenda_index(self, one_based: int) -> int:
+        """1-based -> 0-based, bounded to the agenda list.
+
+        Without the upper bound an out-of-range index pushes the pointer past
+        the end of the agenda, after which the kanban and every tool that reads
+        the current item silently fall back to 'no agenda'.
+        """
+        agendas = self.meeting_agendas()
+        if not agendas:
+            return 0
+        return max(0, min(len(agendas) - 1, one_based - 1))
+
+    def find_attendee(self, name: str) -> dict | None:
+        """Resolve a spoken name/role to a configured attendee."""
+        if not name:
+            return None
+        needle = name.strip()
+        if not needle:
+            return None
+        attendees = self.meeting_attendees()
+        for a in attendees:
+            if a.get("name", "").strip() == needle:
+                return a
+        for a in attendees:
+            if a.get("role", "").strip() == needle:
+                return a
+        # tolerate the model saying "杨部长" / "生产制造部部长 张三"
+        for a in attendees:
+            nm = a.get("name", "").strip()
+            role = a.get("role", "").strip()
+            if (nm and nm in needle) or (role and role in needle):
+                return a
+        return None
+
+    def pending_required_speakers(self) -> list[dict]:
+        """Required attendees who have not been called on for this agenda yet."""
+        return [
+            a
+            for a in self.meeting_attendees()
+            if a.get("required") and a.get("id") not in self.called_attendee_ids
+        ]
+
+    def incomplete_decisions(self) -> list[tuple[dict, list[str]]]:
+        """Decisions missing any of the four mandatory elements."""
+        out: list[tuple[dict, list[str]]] = []
+        for d in self.decisions:
+            missing = missing_decision_fields(d)
+            if missing:
+                out.append((d, missing))
+        return out
+
+    def decisions_for_current_agenda(self) -> list[dict]:
+        title = self.current_agenda_title()
+        return [d for d in self.decisions if d.get("agendaTitle") == title]
+
+    def open_items_for_current_agenda(self) -> list[dict]:
+        title = self.current_agenda_title()
+        return [o for o in self.open_items if o.get("agendaTitle") == title]
 
     async def publish_meeting_data(self, payload: dict):
         if not self.ctx or not self.ctx.room or not self.ctx.room.local_participant:
@@ -575,6 +919,8 @@ class SessionManager:
             self.meeting_start_time = time.time()
             self.current_agenda_index = 0
             self.decisions = []
+            self.open_items = []
+            self.called_attendee_ids = set()
             self.overtime_alerted = set()
             tools.extend(create_meeting_tools(self))
             if self.monitor_task and not self.monitor_task.done():
@@ -600,14 +946,16 @@ class SessionManager:
                     "currentAgendaIndex": self.current_agenda_index,
                     "elapsedSeconds": self.get_elapsed_seconds(),
                     "decisions": self.decisions,
+                    "openItems": self.open_items,
+                    "calledAttendeeIds": [],
                     "driftWarning": False,
                 }
             })
 
-        # Greet the user
-        await self.current_session.generate_reply(
-            instructions="Please begin the interaction with the user in a manner consistent with your instructions."
-        )
+        # Register RPC methods BEFORE the opening announcement.
+        # generate_reply() blocks until the greeting finishes speaking; registering
+        # afterwards left a window in which "立即纠偏" / "推进议题" hit an
+        # unregistered method and failed.
 
         # Register RPC method for config updates
         @ctx.room.local_participant.register_rpc_method("pg.updateConfig")
@@ -637,8 +985,9 @@ class SessionManager:
             try:
                 payload = json.loads(data.payload) if data.payload else {}
                 item_index = payload.get("item_index", self.current_agenda_index + 2)
-                target_idx = max(0, item_index - 1)
+                target_idx = self.clamp_agenda_index(int(item_index))
                 self.current_agenda_index = target_idx
+                self.called_attendee_ids = set()
                 await self.publish_meeting_data({
                     "type": "advance_agenda",
                     "currentAgendaIndex": target_idx,
@@ -684,6 +1033,12 @@ class SessionManager:
             except Exception as err:
                 logger.error(f"Error handling forceIntervene RPC: {err}")
                 return json.dumps({"success": False, "error": str(err)})
+
+        # Greet the user (RPC endpoints are live by this point, so a participant
+        # clicking 立即纠偏 during the opening announcement is served correctly)
+        await self.current_session.generate_reply(
+            instructions="Please begin the interaction with the user in a manner consistent with your instructions."
+        )
 
     async def send_image_to_frontend(self, prompt: str, image_data: bytes):
         if not self.ctx or not self.participant:

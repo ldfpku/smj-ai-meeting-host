@@ -26,6 +26,7 @@ import {
 } from "@/components/configuration-form";
 import { voices } from "@/data/voices";
 import { VoicesShowcase } from "@/components/voices-showcase";
+import { VoicePreviewButton } from "@/components/voice-preview-button";
 
 export function VoiceSelector({ form, ...props }: ConfigurationFormFieldProps) {
   const [hoverCardOpen, setHoverCardOpen] = React.useState(false);
@@ -37,7 +38,7 @@ export function VoiceSelector({ form, ...props }: ConfigurationFormFieldProps) {
       render={({ field }) => (
         <FormItem className="flex flex-row items-center space-y-0 justify-between px-1">
           <div className="flex items-center gap-2">
-            <FormLabel className="text-sm font-medium text-fg1">Voice</FormLabel>
+            <FormLabel className="text-sm font-medium text-fg1">音色</FormLabel>
             <VoicesShowcase 
               onSelectVoice={(voiceId) => {
                 if (ConfigurationFormSchema.shape.voice.safeParse(voiceId).success) {
@@ -52,7 +53,8 @@ export function VoiceSelector({ form, ...props }: ConfigurationFormFieldProps) {
           </div>
           <HoverCard openDelay={200} open={hoverCardOpen} onOpenChange={setHoverCardOpen}>
             <HoverCardTrigger asChild>
-              <div>
+              <div className="flex items-center gap-1.5">
+                <VoicePreviewButton voice={field.value} />
                 <Select
                   onValueChange={(v) => {
                     if (
@@ -63,11 +65,11 @@ export function VoiceSelector({ form, ...props }: ConfigurationFormFieldProps) {
                   }}
                   defaultValue={form.formState.defaultValues!.voice!}
                   value={field.value}
-                  aria-label="Voice"
+                  aria-label="音色"
                 >
                   <FormControl>
                     <SelectTrigger>
-                      <SelectValue placeholder="Choose voice" />
+                      <SelectValue placeholder="选择音色" />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
@@ -88,7 +90,7 @@ export function VoiceSelector({ form, ...props }: ConfigurationFormFieldProps) {
               className="w-[260px] text-sm"
               side="right"
             >
-              Choose the base voice for the model.
+              选择模型使用的基础音色。
             </HoverCardContent>
           </HoverCard>
         </FormItem>

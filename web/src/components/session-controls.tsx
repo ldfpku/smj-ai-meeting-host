@@ -47,6 +47,8 @@ export function SessionControls() {
             className={`inline-flex items-center justify-center whitespace-nowrap rounded-l-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 text-foreground hover:!bg-bg3 hover:!rounded-l-md h-9 shadow-none !px-3 !border-r-[1px] !border-separator1`}
             style={{ borderRightStyle: "solid" }}
             showIcon={false}
+            aria-label={isMuted ? "开启麦克风" : "关闭麦克风"}
+            title={isMuted ? "开启麦克风" : "关闭麦克风"}
           >
             {isMuted ? (
               <MicOff className="text-fg3 h-4 w-4" />
@@ -71,6 +73,8 @@ export function SessionControls() {
             <Button
               variant="secondary"
               className="h-9 px-3 bg-bg2 shadow-none hover:bg-bg3 rounded-l-none rounded-r-md border-l-[1px] border-separator1 text-sm font-semibold"
+              aria-label="选择音频输入设备"
+              title="选择音频输入设备"
             >
               <ChevronDown className="h-4 w-4 text-fg3" />
             </Button>
@@ -82,7 +86,7 @@ export function SessionControls() {
             forceMount
           >
             <DropdownMenuLabel className="text-xs uppercase tracking-widest">
-              Available inputs
+              可用输入设备
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             {deviceSelect.devices.map((device, index) => (
@@ -99,7 +103,7 @@ export function SessionControls() {
             ))}
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs uppercase tracking-widest">
-              Audio Settings
+              音频设置
             </DropdownMenuLabel>
             <DropdownMenuCheckboxItem
               className="text-xs"
@@ -109,14 +113,14 @@ export function SessionControls() {
               }}
               disabled={isNoiseFilterPending}
             >
-              Enhanced Noise Filter
+              增强降噪
             </DropdownMenuCheckboxItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
       <Button variant="destructive" onClick={disconnect} className="h-9">
         <PhoneOff className="h-4 w-4" />
-        Disconnect
+        断开
       </Button>
     </div>
   );

@@ -78,8 +78,8 @@ export function PresetSelector(props: PopoverProps) {
       setShowDeleteDialog(false);
       setPresetToDelete(null);
       toast({
-        title: "Preset removed",
-        description: "Your saved preset has been removed.",
+        title: "预设已删除",
+        description: "你保存的预设已被删除。",
       });
     }
   };
@@ -120,7 +120,7 @@ export function PresetSelector(props: PopoverProps) {
             size="sm"
             variant="outline"
             role="combobox"
-            aria-label="Load…"
+            aria-label="加载…"
             aria-expanded={open}
             className="flex-1 justify-between md:max-w-[200px] lg:max-w-[300px]"
           >
@@ -132,17 +132,17 @@ export function PresetSelector(props: PopoverProps) {
                 }
                 return null;
               })()}
-              <span>{helpers.getSelectedPreset(pgState)?.name || "Load…"}</span>
+              <span>{helpers.getSelectedPreset(pgState)?.name || "加载…"}</span>
             </div>
             <CaretSortIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[300px] p-0">
           <Command>
-            <CommandInput placeholder="Search…" />
+            <CommandInput placeholder="搜索…" />
             <CommandList className="max-h-[320px]">
               {pgState.userPresets.length > 0 && (
-                <CommandGroup heading="Saved">
+                <CommandGroup heading="已保存">
                   {pgState.userPresets.map((preset: Preset) => (
                     <CommandItem
                       key={preset.id}
@@ -205,14 +205,14 @@ export function PresetSelector(props: PopoverProps) {
                 >
                   <div className="flex items-center">
                     <FileIcon className="mr-2 h-4 w-4" />
-                    <span>Start from scratch</span>
+                    <span>从空白开始</span>
                   </div>
                 </CommandItem>
               </CommandGroup>
 
               {Object.values(PresetGroup).map((group) => (
                 <CommandGroup key={group} heading={group}>
-                  <CommandEmpty>No examples found.</CommandEmpty>
+                  <CommandEmpty>未找到示例</CommandEmpty>
                   {helpers
                     .getDefaultPresets()
                     .filter((preset) => preset.defaultGroup === group)
@@ -261,16 +261,16 @@ export function PresetSelector(props: PopoverProps) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete &quot;{presetToDelete?.name}&quot;?
+              确定删除「{presetToDelete?.name}」？
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This cannot be undone.
+              此操作无法撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>取消</AlertDialogCancel>
             <Button variant="destructive" onClick={handleDelete}>
-              Delete
+              删除
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

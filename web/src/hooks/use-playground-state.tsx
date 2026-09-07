@@ -32,9 +32,17 @@ const presetStorageHelper = {
     localStorage.setItem(LS_USER_PRESETS_KEY, JSON.stringify(presets));
   },
   getStoredSelectedPresetId: (): string => {
-    return (
-      localStorage.getItem(LS_SELECTED_PRESET_ID_KEY) || defaultPresets[0].id
-    );
+    const storedId = localStorage.getItem(LS_SELECTED_PRESET_ID_KEY);
+    if (!storedId) return defaultPresets[0].id;
+    // A preset that existed in an earlier build may since have been removed
+    // (the playground shipped a set of unrelated demo presets that are gone).
+    // Resolving to an unknown id leaves the app with no selected preset at all,
+    // so fall back to the default rather than trusting localStorage blindly.
+    const knownIds = [
+      ...defaultPresets.map((p) => p.id),
+      ...presetStorageHelper.getStoredPresets().map((p) => p.id),
+    ];
+    return knownIds.includes(storedId) ? storedId : defaultPresets[0].id;
   },
   setStoredSelectedPresetId: (presetId: string | null): void => {
     if (presetId !== null) {
@@ -228,7 +236,7 @@ export const PlaygroundStateProvider = ({
       if (urlData.preset && urlData.preset.name) {
         const newPreset: Preset = {
           id: urlData.state.selectedPresetId,
-          name: urlData.preset.name || "Shared Preset",
+          name: urlData.preset.name || "分享的预设",
           description: urlData.preset.description,
           instructions: urlData.state.instructions || "",
           sessionConfig: urlData.state.sessionConfig || defaultSessionConfig,
