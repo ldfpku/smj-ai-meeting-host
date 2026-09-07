@@ -30,11 +30,11 @@ This directory houses the web frontend, built with Next.js.
 ### Agent Setup
 
 1. Navigate to the `/agent` directory
-2. Create a virtual environment: `python -m venv .venv`
+2. Create a virtual environment: `uv venv`
 3. Activate the virtual environment:
    - On macOS and Linux: `source .venv/bin/activate`
    - On Windows: `.venv\Scripts\activate`
-4. Install dependencies: `pip install -r requirements.txt`
+4. Install dependencies: `uv pip install -e .` or `uv pip install -r requirements.txt`
 5. Run the agent in development mode: `python main.py dev`
 
 ### Web Frontend Setup

@@ -25,7 +25,9 @@ from livekit.agents import (
 )
 from livekit.plugins import google
 
+# Load .env.local from current directory or parent directory
 load_dotenv(dotenv_path=".env.local")
+load_dotenv(dotenv_path="../.env.local")
 
 logger = logging.getLogger("gemini-playground")
 logger.setLevel(logging.INFO)
