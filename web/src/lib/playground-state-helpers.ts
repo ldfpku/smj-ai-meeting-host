@@ -7,6 +7,13 @@ import { Preset, defaultPresets } from "@/data/presets";
 import { IMMUTABLE_NANO_BANANA_PROMPT } from "@/data/immutable-prompt";
 
 export const playgroundStateHelpers = {
+  /**
+   * 是否已有可用的 Gemini 密钥：浏览器里填过，或服务端 .env.local 已配置。
+   * 服务端配置时密钥不会下发到浏览器，因此不能只看 geminiAPIKey。
+   */
+  hasGeminiKey: (state: PlaygroundState): boolean =>
+    !!state.geminiAPIKey || state.geminiKeyFromEnv,
+
   getSelectedPreset: (state: PlaygroundState) => {
     return [...defaultPresets, ...state.userPresets].find(
       (preset) => preset.id === state.selectedPresetId,

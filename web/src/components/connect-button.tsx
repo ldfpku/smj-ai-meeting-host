@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useConnection } from "@/hooks/use-connection";
 import { Loader2, PhoneCall, Settings } from "lucide-react";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
+import { playgroundStateHelpers } from "@/lib/playground-state-helpers";
 import { AuthDialog } from "./auth";
 
 export function ConnectButton() {
@@ -18,7 +19,7 @@ export function ConnectButton() {
     if (shouldConnect) {
       await disconnect();
     } else {
-      if (!pgState.geminiAPIKey) {
+      if (!playgroundStateHelpers.hasGeminiKey(pgState)) {
         setShowAuthDialog(true);
       } else {
         await initiateConnection();
@@ -43,11 +44,11 @@ export function ConnectButton() {
   };
 
   useEffect(() => {
-    if (initiateConnectionFlag && pgState.geminiAPIKey) {
+    if (initiateConnectionFlag && playgroundStateHelpers.hasGeminiKey(pgState)) {
       initiateConnection();
       setInitiateConnectionFlag(false);
     }
-  }, [initiateConnectionFlag, initiateConnection, pgState.geminiAPIKey]);
+  }, [initiateConnectionFlag, initiateConnection, pgState]);
 
   return (
     <>
@@ -70,7 +71,7 @@ export function ConnectButton() {
             </>
           )}
         </Button>
-        {!shouldConnect && !connecting && pgState.geminiAPIKey && (
+        {!shouldConnect && !connecting && playgroundStateHelpers.hasGeminiKey(pgState) && (
           <Button
             onClick={() => setShowAuthDialog(true)}
             variant="outline"

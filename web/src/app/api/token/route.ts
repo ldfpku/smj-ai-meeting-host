@@ -25,9 +25,13 @@ export async function POST(request: Request) {
       sessionConfig: { model, modalities, voice, temperature, maxOutputTokens, nanoBananaEnabled, meetingConfig },
     } = playgroundState;
 
-    if (!geminiAPIKey) {
+    // 密钥优先取服务端环境变量（根目录 .env.local），浏览器传入的作为兜底，
+    // 这样部署方把 GEMINI_API_KEY 配好后，使用者无需自己填写。
+    const resolvedGeminiKey = process.env.GEMINI_API_KEY?.trim() || geminiAPIKey;
+
+    if (!resolvedGeminiKey) {
       return Response.json(
-        { error: "Gemini API key is required" },
+        { error: "未配置 Gemini API 密钥：请在根目录 .env.local 设置 GEMINI_API_KEY，或在界面中填写。" },
         { status: 400 }
       );
     }
@@ -49,7 +53,7 @@ export async function POST(request: Request) {
       max_output_tokens: maxOutputTokens,
       nano_banana_enabled: nanoBananaEnabled, // Send as boolean, not string
       meeting_config: meetingConfig,
-      gemini_api_key: geminiAPIKey,
+      gemini_api_key: resolvedGeminiKey,
     };
     
     // Create access token

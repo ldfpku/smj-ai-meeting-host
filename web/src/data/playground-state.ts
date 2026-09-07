@@ -24,6 +24,8 @@ export interface PlaygroundState {
   userPresets: Preset[];
   selectedPresetId: string | null;
   geminiAPIKey: string | null | undefined;
+  /** 服务端 .env.local 已配置 GEMINI_API_KEY 时为 true，此时用户无需自己填写 */
+  geminiKeyFromEnv: boolean;
   instructions: string;
 }
 
@@ -50,5 +52,6 @@ export const defaultPlaygroundState: PlaygroundState = {
   userPresets: [],
   selectedPresetId: "meeting-moderator",
   geminiAPIKey: undefined,
+  geminiKeyFromEnv: false,
   instructions: generateMeetingInstructions(defaultMeetingConfig),
 };

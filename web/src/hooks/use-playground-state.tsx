@@ -60,6 +60,7 @@ type Action =
     payload: Partial<PlaygroundState["sessionConfig"]>;
   }
   | { type: "SET_API_KEY"; payload: string | null }
+  | { type: "SET_GEMINI_KEY_FROM_ENV"; payload: boolean }
   | { type: "SET_INSTRUCTIONS"; payload: string }
   | { type: "SET_USER_PRESETS"; payload: Preset[] }
   | { type: "SET_SELECTED_PRESET_ID"; payload: string | null }
@@ -89,6 +90,11 @@ function playgroundStateReducer(
       return {
         ...state,
         geminiAPIKey: action.payload,
+      };
+    case "SET_GEMINI_KEY_FROM_ENV":
+      return {
+        ...state,
+        geminiKeyFromEnv: action.payload,
       };
     case "SET_INSTRUCTIONS":
       return {
@@ -187,7 +193,18 @@ export const PlaygroundStateProvider = ({
       dispatch({ type: "SET_API_KEY", payload: storedKey });
     } else {
       dispatch({ type: "SET_API_KEY", payload: null });
-      setShowAuthDialog(true);
+      // 服务端 .env.local 里可能已配置 GEMINI_API_KEY；配置了就不必打扰用户填写。
+      // 密钥本身不会下发到浏览器，这里只拿一个布尔值。
+      fetch("/api/gemini-status")
+        .then((r) => (r.ok ? r.json() : { configured: false }))
+        .then((d) => {
+          if (d?.configured) {
+            dispatch({ type: "SET_GEMINI_KEY_FROM_ENV", payload: true });
+          } else {
+            setShowAuthDialog(true);
+          }
+        })
+        .catch(() => setShowAuthDialog(true));
     }
 
     // Load presets from localStorage
