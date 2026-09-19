@@ -20,18 +20,17 @@ from google.genai import types
 from livekit import rtc
 from livekit.agents import (
     Agent,
+    AgentServer,
     AgentSession,
     AutoSubscribe,
     JobContext,
-    WorkerOptions,
-    WorkerType,
     cli,
     function_tool,
+    llm,
     utils,
 )
 from livekit.agents.voice.turn import (
     EndpointingOptions,
-    InterruptionOptions,
     TurnHandlingOptions,
 )
 from livekit.plugins import google
@@ -45,6 +44,30 @@ logger.setLevel(logging.INFO)
 
 # Suppress OpenTelemetry attribute warnings
 logging.getLogger("opentelemetry.attributes").setLevel(logging.ERROR)
+
+
+def model_supports_proactive_audio(model: str) -> bool:
+    """Whether the Live model honours ``proactivity`` (proactive audio).
+
+    Google documents proactive audio (and affective dialog) as *not supported*
+    on Gemini 3.1 Flash Live; only the 2.5 native-audio models use it. Passing
+    ``proactivity=True`` anyway makes livekit-plugins-google move the whole
+    session onto the ``v1alpha`` API surface for no benefit.
+    """
+    return "3.1" not in model
+
+
+#: Cue that makes the moderator deliver the opening announcement. It is worded
+#: as a user-side prompt because on gemini-3.1 it is delivered as realtime text
+#: input (see SessionManager.cue_model), not as model instructions.
+OPENING_CUE_MEETING = (
+    "【系统提示】会议现在开始。请立即按照你的开场要求开口："
+    "清晰简短地播报会议名称、总时长与各项议题，然后宣布讨论正式开始。"
+    "不要复述本提示。"
+)
+OPENING_CUE_DEFAULT = (
+    "Please begin the interaction with the user in a manner consistent with your instructions."
+)
 
 
 def _auto_suppress_c_assert_dialogs():
@@ -163,6 +186,13 @@ def parse_session_config(data: Dict[str, Any]) -> SessionConfig:
     return config
 
 
+# Module-level AgentServer: `lk agent dev` and `python -m livekit.agents start`
+# import this file and look for an AgentServer named `server`
+# (see livekit.agents.cli.discover), so it has to live at module scope.
+server = AgentServer()
+
+
+@server.rtc_session(agent_name="gemini-playground")
 async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -865,6 +895,66 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error in meeting time monitor: {e}")
 
+    # ---- making the moderator speak on demand -----------------------------
+
+    def _realtime_session(self) -> llm.RealtimeSession | None:
+        if self.current_agent is None:
+            return None
+        try:
+            return self.current_agent.realtime_llm_session
+        except RuntimeError:
+            # the agent is not running (yet, or any more)
+            return None
+
+    def cue_model(self, text: str, *, allow_interruptions: bool = True):
+        """Make the model speak now (opening announcement, forced intervention…).
+
+        Which mechanism is used depends on the active Live model:
+
+        * Models with a mutable chat context (gemini-2.5 native audio) go through
+          ``AgentSession.generate_reply`` as before.
+        * ``gemini-3.1-flash-live-preview`` only accepts ``client_content`` as the
+          initial history, so livekit-plugins-google 1.8 rejects ``generate_reply``
+          up front ("generate_reply is not compatible with ..." in the logs). That
+          is why the greeting and 立即纠偏 never produced any speech on 3.1. Per the
+          Live API docs, mid-session text must be sent with
+          ``send_realtime_input(text=...)``; the plugin has no public entry point
+          for that, so the cue is queued on its client-event channel as realtime
+          text input. The model answers it like a spoken turn and the reply flows
+          through the usual ``generation_created`` path, so it is scheduled and
+          played exactly like any other model turn.
+
+        Returns the SpeechHandle when ``generate_reply`` was used, else None.
+        Never raises; failures are logged.
+        """
+        session = self.current_session
+        if session is None:
+            logger.warning("cue_model called without an active session")
+            return None
+
+        rt = self._realtime_session()
+        if rt is not None and not rt.capabilities.mutable_chat_context:
+            send = getattr(rt, "_send_client_event", None)
+            if send is not None:
+                send(types.LiveClientRealtimeInput(text=text))
+                logger.info(
+                    f"cue queued as realtime text input for '{rt.realtime_model.model}'"
+                )
+                return None
+            logger.warning(
+                "realtime session exposes no _send_client_event; "
+                "falling back to generate_reply"
+            )
+
+        try:
+            return session.generate_reply(
+                instructions=text,
+                allow_interruptions=allow_interruptions,
+            )
+        except RuntimeError as e:
+            logger.error(f"failed to cue the model: {e}")
+            return None
+
     def create_session(self, config: SessionConfig) -> AgentSession:
         """Create an AgentSession with the given configuration"""
         is_meeting = bool(config.meeting_config)
@@ -875,13 +965,31 @@ class SessionManager:
             "max_output_tokens": int(config.max_response_output_tokens) if config.max_response_output_tokens != "inf" else None,
             "modalities": config.modalities,
             "api_key": config.gemini_api_key,
+            # Without context-window compression an audio-only Live session is
+            # capped at 15 minutes; a 60-minute meeting needs the sliding window.
+            # (Connection lifetime is still ~10 min: the plugin reconnects on
+            # GoAway with the session-resumption handle it already requests.)
+            "context_window_compression": types.ContextWindowCompressionConfig(
+                sliding_window=types.SlidingWindow()
+            ),
         }
 
         session_kwargs = {}
 
         if is_meeting:
-            logger.info("Enabling Meeting Moderator audio parameters: proactive=True, silence_duration_ms=250, NO_INTERRUPTION")
-            llm_kwargs["proactivity"] = True
+            proactive = model_supports_proactive_audio(config.model)
+            logger.info(
+                "Enabling Meeting Moderator audio parameters: "
+                f"proactive={proactive}, silence_duration_ms=250, NO_INTERRUPTION"
+            )
+            if proactive:
+                llm_kwargs["proactivity"] = True
+            else:
+                logger.info(
+                    f"'{config.model}' does not support proactive audio; the model "
+                    "answers every detected turn, so silence during on-topic "
+                    "discussion relies on the instructions alone"
+                )
             llm_kwargs["realtime_input_config"] = types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     silence_duration_ms=250,
@@ -889,14 +997,17 @@ class SessionManager:
                 ),
                 activity_handling=types.ActivityHandling.NO_INTERRUPTION,
             )
+            # 不可打断由 Gemini 服务端的 activity_handling=NO_INTERRUPTION 负责：
+            # 插件在该模式下会直接忽略 interrupt()。这里不能再把会话层的
+            # InterruptionOptions(enabled=False) 叠加上去——RealtimeModel 使用服务端
+            # 轮次检测时，livekit-agents >= 1.8 会在 session.start() 抛出
+            # "allow_interruptions cannot be False"，job 崩溃退出房间，前端随即
+            # 弹出"主持人已断开"。
             session_kwargs["turn_handling"] = TurnHandlingOptions(
                 endpointing=EndpointingOptions(
                     min_delay=0.15,
                     max_delay=0.4,
                     mode="fixed",
-                ),
-                interruption=InterruptionOptions(
-                    enabled=False,
                 ),
             )
 
@@ -952,10 +1063,9 @@ class SessionManager:
                 }
             })
 
-        # Register RPC methods BEFORE the opening announcement.
-        # generate_reply() blocks until the greeting finishes speaking; registering
-        # afterwards left a window in which "立即纠偏" / "推进议题" hit an
-        # unregistered method and failed.
+        # Register RPC methods BEFORE the opening announcement, so a participant
+        # clicking "立即纠偏" / "推进议题" while the greeting is being spoken never
+        # hits an unregistered method.
 
         # Register RPC method for config updates
         @ctx.room.local_participant.register_rpc_method("pg.updateConfig")
@@ -1024,10 +1134,9 @@ class SessionManager:
                         f"核心目标是【{cur_goal}】。刚才讨论已脱离本议题，请大家立刻收束，回到当前议题的核心讨论！”"
                         f"态度果断有力，绝对不可退缩！"
                     )
-                    await self.current_session.generate_reply(
-                        instructions=prompt,
-                        allow_interruptions=False,
-                    )
+                    # Not awaited: the RPC must return before LiveKit's timeout,
+                    # and the speech itself is scheduled by the session.
+                    self.cue_model(prompt, allow_interruptions=False)
 
                 return json.dumps({"success": True})
             except Exception as err:
@@ -1036,8 +1145,8 @@ class SessionManager:
 
         # Greet the user (RPC endpoints are live by this point, so a participant
         # clicking 立即纠偏 during the opening announcement is served correctly)
-        await self.current_session.generate_reply(
-            instructions="Please begin the interaction with the user in a manner consistent with your instructions."
+        self.cue_model(
+            OPENING_CUE_MEETING if self.current_config.meeting_config else OPENING_CUE_DEFAULT
         )
 
     async def send_image_to_frontend(self, prompt: str, image_data: bytes):
@@ -1107,25 +1216,31 @@ class SessionManager:
             agent=self.current_agent,
         )
 
+        # Best effort: on gemini-3.1 the replayed (text) history makes the model
+        # answer the very first realtime *text* turn as text only, so this
+        # announcement may stay silent there; normal audio turns are unaffected.
         try:
             if nano_banana_newly_enabled:
                 logger.info("Nano Banana tool newly enabled")
-                await self.current_session.generate_reply(
-                    instructions="Briefly and enthusiastically announce: 'Nano Banana now active, feel free to ask me to generate an image and I can show you whatever you like!'",
+                self.cue_model(
+                    "Briefly and enthusiastically announce: 'Nano Banana now active, feel free to ask me to generate an image and I can show you whatever you like!'",
                 )
             elif config.meeting_config and not old_config.meeting_config:
                 logger.info("Meeting mode newly enabled")
-                await self.current_session.generate_reply(
-                    instructions="Briefly announce that Meeting Moderator mode is now active with the configured agenda.",
+                self.cue_model(
+                    "Briefly announce that Meeting Moderator mode is now active with the configured agenda.",
                 )
             else:
                 logger.info("Session restarted with new config")
-                await self.current_session.generate_reply(
-                    instructions=is_nano_banana_enabled and "Briefly acknowledge that your configuration has been updated and you're ready to continue and announce that you can also generate images now!" or "Briefly acknowledge that your configuration has been updated and you're ready to continue"
+                self.cue_model(
+                    is_nano_banana_enabled and "Briefly acknowledge that your configuration has been updated and you're ready to continue and announce that you can also generate images now!" or "Briefly acknowledge that your configuration has been updated and you're ready to continue"
                 )
         except Exception as e:
             logger.error(f"Failed to notify user about config change: {e}")
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(agent_name='gemini-playground', entrypoint_fnc=entrypoint, worker_type=WorkerType.ROOM))
+    # Kept for backwards compatibility (`python main.py start|console`).
+    # The built-in Python CLI is deprecated since livekit-agents 1.8: use
+    # `lk agent dev` locally and `python -m livekit.agents start` in production.
+    cli.run_app(server)

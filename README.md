@@ -18,26 +18,30 @@ This directory houses the web frontend, built with Next.js.
 
 ## Prerequisites
 
-- Python 3.9 or higher
-- pip (Python package installer)
+- Python 3.12 or higher
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- [LiveKit CLI](https://docs.livekit.io/home/cli/) (`lk`), which runs the agent locally with hot reload
 - LiveKit Cloud or self-hosted LiveKit server
 
 ## Getting Started
 
 ### Env Setup
 
-1. Copy the sample environment file: `cp .env.sample .env.local`
-2. Open `.env.local` in a text editor and enter your LiveKit credentials
+1. Copy the sample environment file: `cp .env.example .env.local`
+2. Open `.env.local` in a text editor and enter your LiveKit credentials and `GEMINI_API_KEY`
 
 ### Agent Setup
 
 1. Navigate to the `/agent` directory
-2. Create a virtual environment: `uv venv`
-3. Activate the virtual environment:
-   - On macOS and Linux: `source .venv/bin/activate`
-   - On Windows: `.venv\Scripts\activate`
-4. Install dependencies: `uv pip install -e .` or `uv pip install -r requirements.txt`
-5. Run the agent in development mode: `python main.py dev`
+2. Install dependencies (creates `.venv` from `uv.lock`): `uv sync`
+3. Let the LiveKit CLI use your project credentials, once: `lk cloud auth`
+   (pick the same project as in `.env.local`). `lk` does not read `.env.local`;
+   alternatively export `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` in your shell.
+4. Run the agent in development mode with hot reload: `lk agent dev main.py`
+
+`lk` finds the interpreter in `.venv` by itself, so activating the virtualenv is optional.
+`python main.py dev` is deprecated since livekit-agents 1.8 and no longer auto-reloads;
+see [agent/README.md](agent/README.md) for details and the production command.
 
 ### Web Frontend Setup
 

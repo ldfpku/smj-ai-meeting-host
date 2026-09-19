@@ -24,4 +24,5 @@ COPY . .
 # Install dependencies using uv with proper dependency resolution
 RUN uv pip install --system .
 
-CMD ["python", "main.py", "start"]
+# Thin (non-deprecated) CLI: discovers the module-level `server` in main.py
+CMD ["python", "-m", "livekit.agents", "start"]

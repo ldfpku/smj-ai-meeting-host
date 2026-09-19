@@ -18,21 +18,29 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Or with Homebrew
 brew install uv
+
+# Windows
+winget install --id=astral-sh.uv -e
 ```
 
-2. Create a virtual environment and install dependencies:
+2. Install the LiveKit CLI (`lk`). It runs the agent locally and hot-reloads it on file changes:
 ```bash
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -r pyproject.toml
+# macOS
+brew install livekit-cli
+
+# Linux
+curl -sSL https://get.livekit.io/cli | bash
+
+# Windows
+winget install LiveKit.LiveKitCLI
 ```
 
-Or simply use `uv run` to run commands without activating:
+3. Install dependencies (creates `.venv` from `uv.lock`):
 ```bash
-uv run python main.py dev
+uv sync
 ```
 
-3. Create `.env.local` file with your secrets:
+4. Create `.env.local` with your LiveKit secrets, either here in `agent/` or at the repository root (the agent reads both, and the root file is shared with the web frontend):
 ```bash
 LIVEKIT_URL=your_livekit_url
 LIVEKIT_API_KEY=your_api_key
@@ -40,14 +48,26 @@ LIVEKIT_API_SECRET=your_api_secret
 ```
 To get these secrets, you can use the LiveKit CLI following the instructions below (steps 1-4).
 
+5. Give `lk` access to the same LiveKit project, once:
+```bash
+lk cloud auth
+```
+`lk` takes the LiveKit credentials from its own project config or from the `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` environment variables; it does **not** read `.env.local`. Exporting those three variables in your shell is the alternative to `lk cloud auth`.
+
 ### Run Locally
 
 ```bash
-# With activated virtualenv
-python main.py dev
+lk agent dev main.py
+```
 
-# Or directly with uv
-uv run python main.py dev
+- The `main.py` argument is required: `lk` only auto-detects `agent.py` or `src/agent.py`.
+- `lk` finds the interpreter in `.venv` by itself, so activating the virtualenv is optional.
+- Files are watched and the agent restarts on change (`--no-reload` disables this).
+- `python main.py dev` and `uv run main.py dev` still work but are deprecated since livekit-agents 1.8: they print a deprecation warning and no longer auto-reload.
+
+In production the container runs the thin, non-deprecated CLI instead (see `Dockerfile`):
+```bash
+python -m livekit.agents start
 ```
 
 ## CI/CD Deployment to LiveKit Cloud
@@ -108,7 +128,7 @@ After deployment:
 
 ```
 agent/
-├── main.py              # Main agent code
+├── main.py              # Agent code; exposes the AgentServer `server` that lk runs
 ├── pyproject.toml       # Python project & dependencies (uv)
 ├── .python-version      # Python version specification
 ├── Dockerfile          # Docker build configuration

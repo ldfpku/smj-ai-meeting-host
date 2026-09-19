@@ -1,7 +1,7 @@
 export enum ModelId {
   // Native audio models
   GEMINI_3_1_FLASH_LIVE_PREVIEW = "gemini-3.1-flash-live-preview",
-  GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_09_2025 = "gemini-2.5-flash-native-audio-preview-09-2025",
+  GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_12_2025 = "gemini-2.5-flash-native-audio-preview-12-2025",
 }
 
 export enum ModelCategory {
@@ -24,10 +24,10 @@ export const modelsData: Record<ModelId, Model> = {
     category: ModelCategory.NATIVE_AUDIO,
     isNew: true,
   },
-  [ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_09_2025]: {
-    id: ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_09_2025,
+  [ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_12_2025]: {
+    id: ModelId.GEMINI_2_5_FLASH_NATIVE_AUDIO_PREVIEW_12_2025,
     name: "Gemini 2.5 Flash Native Audio",
-    description: "自然语音，支持情绪感知对话与思考（2025 年 9 月版）",
+    description: "自然语音，支持情绪感知对话与思考（2025 年 12 月版，支持主动静默）",
     category: ModelCategory.NATIVE_AUDIO,
     isNew: false,
   },
