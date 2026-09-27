@@ -452,8 +452,11 @@ async function askWorker(input: string): Promise<string> {
 
   const reader = new ChatStreamReader();
   const decoder = new TextDecoder();
-  for await (const chunk of upstream.body) {
-    reader.push(decoder.decode(chunk as Uint8Array, { stream: true }));
+  const body = upstream.body.getReader();
+  for (;;) {
+    const { done, value } = await body.read();
+    if (done) break;
+    reader.push(decoder.decode(value, { stream: true }));
   }
   reader.push(decoder.decode());
   reader.end();

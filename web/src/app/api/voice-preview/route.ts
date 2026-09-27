@@ -173,7 +173,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let upstream: Awaited<ReturnType<typeof proxyFetch>>;
+  let upstream: Response;
   try {
     upstream = await proxyFetch(TTS_ENDPOINT, {
       method: "POST",

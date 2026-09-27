@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // The web app on Cloudflare Workers, built by the OpenNext adapter.
+  // Who may open it is decided by Cloudflare Access (Zero Trust) in front of
+  // the domain, not by this Worker: see "Deployment" in the README.
+  "name": "smj-meeting",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-20",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // Only the custom domain. A workers.dev or preview address would be a way
+  // around the login.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "meeting.smjtools.com", "custom_domain": true }],
+  // The API routes call Gemini, which refuses requests from some regions
+  // (Hong Kong among them). Without this the Worker runs wherever the visitor
+  // is; with it, in a Cloudflare data center next to this cloud region, which
+  // is also where the LiveKit project lives.
+  "placement": { "region": "gcp:us-west1" },
+  "observability": {
+    "enabled": true
+  }
+}

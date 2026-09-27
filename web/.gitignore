@@ -37,3 +37,8 @@ yarn-error.log*
 next-env.d.ts
 # 音色试听音频缓存（由 /api/voice-preview 生成）
 .cache/
+
+# Cloudflare build output and local secrets for `wrangler dev`
+.open-next/
+.wrangler/
+.dev.vars

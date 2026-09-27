@@ -12,3 +12,7 @@ __pycache__/
 # simulated meetings (agent/sim/run.py)
 agent/sim/.cache/
 agent/sim/runs/
+
+# tooling installed per developer (Spec Kit and its skills)
+.claude/skills/
+.specify/

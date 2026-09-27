@@ -161,13 +161,53 @@ DISC 性格测评结论、绩效评价与人员姓名**不写入任何提示词�
 
 ## Deployment
 
-The agent can be deployed in a variety of ways: [Deployment & Scaling Guide](https://docs.livekit.io/agents/deployment/)
+线上地址：<https://meeting.smjtools.com>
+
+| 部分 | 运行在 | 怎么发布 |
+|---|---|---|
+| 网页 | Cloudflare Workers（Worker 名 `smj-meeting`） | 在 `web/` 下构建后 `pnpm exec wrangler deploy` |
+| agent | LiveKit Cloud | GitHub Actions 里手动运行 `Deploy Agent to LiveKit Cloud` |
+
+### 谁能登录
+
+域名前面是 Cloudflare Access（Zero Trust）。打开页面先要输入邮箱，收到验证码后才能进入；
+不在名单里的邮箱收不到验证码。页面、接口、静态文件都在保护范围内。
+
+名单在 Cloudflare 控制台：Zero Trust → Access → Policies → `smj-meeting-users`。
+增减人员只改这一处，不需要重新发布。
+
+Worker 只绑定了这一个域名，没有开放 `workers.dev` 和预览地址，否则会绕过登录。
+
+### 发布网页
+
+```bash
+cd web
+pnpm cf:build                 # Linux、macOS、WSL
+pnpm exec wrangler deploy
+```
+
+在 Windows 上 OpenNext 构建出的包运行时会出错，改用容器构建（需要 Docker）：
+
+```bash
+cd web
+bash scripts/cf-build-in-docker.sh
+pnpm exec wrangler deploy
+```
+
+密钥存在 Worker 的 secret 里，只在首次发布或更换时设置：
+`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`GEMINI_API_KEY`、
+`AI_WORKER_URL`、`AI_WORKER_KEY`（`pnpm exec wrangler secret put <名称>`）。
+不要设置 `LIVEKIT_AGENT_NAME`：线上要连的是默认名称的 agent。
+
+Worker 指定在美国西部运行（`wrangler.jsonc` 的 `placement`）。Gemini 会拒绝来自部分地区
+（包括香港）的请求，不指定的话 Worker 会在离访问者最近的节点运行。
+
+### 发布 agent
 
 The deployed agent needs `GEMINI_API_KEY` and `JEV_API_KEY` in its environment. The
 GitHub workflow passes them on from the secrets of the `production` environment; see
-[agent/README.md](agent/README.md).
-
-The web frontend can be deployed using your preferred Next.js hosting solution, such as [Vercel](https://vercel.com/).
+[agent/README.md](agent/README.md). 该环境里还需要 `LIVEKIT_URL`、`LIVEKIT_API_KEY`、
+`LIVEKIT_API_SECRET`。
 
 ## Troubleshooting
 

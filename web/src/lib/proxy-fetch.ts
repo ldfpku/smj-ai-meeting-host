@@ -1,5 +1,3 @@
-import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
-
 /**
  * 带代理的 fetch（仅服务端使用）。
  *
@@ -17,6 +15,9 @@ import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit
  *
  * 注意：ALL_PROXY 常见为 socks5，undici 的 ProxyAgent 只支持 HTTP(S) 代理，
  * 因此这里只取 HTTPS_PROXY / HTTP_PROXY。
+ *
+ * 没有配置代理时（部署在 Cloudflare Workers 上就是这样）用运行环境自带的 fetch，
+ * undici 只在确实要走代理时才加载：它依赖的 Node 网络接口在 Workers 上没有。
  */
 
 function resolveProxyUrl(): string | undefined {
@@ -34,25 +35,28 @@ function resolveProxyUrl(): string | undefined {
 }
 
 // 只建一次，避免每个请求都新建连接池
-let cachedAgent: ProxyAgent | null | undefined;
+let proxied: Promise<typeof fetch> | undefined;
 
-function getAgent(): ProxyAgent | null {
-  if (cachedAgent === undefined) {
-    const url = resolveProxyUrl();
-    cachedAgent = url ? new ProxyAgent(url) : null;
-    console.log(
-      url
-        ? `[proxy-fetch] 通过代理访问外部 API: ${url}`
-        : "[proxy-fetch] 未配置 HTTP(S) 代理，直连外部 API"
-    );
-  }
-  return cachedAgent;
+async function loadProxiedFetch(url: string): Promise<typeof fetch> {
+  const undici = await import("undici");
+  const agent = new undici.ProxyAgent(url);
+  console.log(`[proxy-fetch] 通过代理访问外部 API: ${url}`);
+  return ((input: string | URL, init?: RequestInit) =>
+    undici.fetch(input, {
+      ...(init as object),
+      dispatcher: agent,
+    })) as unknown as typeof fetch;
 }
 
 /** 与 fetch 同签名；配置了 HTTP(S) 代理时自动走代理，否则直连 */
-export function proxyFetch(input: string | URL, init?: UndiciRequestInit) {
-  const agent = getAgent();
-  return undiciFetch(input, agent ? { ...init, dispatcher: agent } : init);
+export async function proxyFetch(
+  input: string | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const url = resolveProxyUrl();
+  if (!url) return fetch(input, init);
+  proxied ??= loadProxiedFetch(url);
+  return (await proxied)(input, init);
 }
 
 export function isProxyConfigured(): boolean {
