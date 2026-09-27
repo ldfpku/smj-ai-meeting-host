@@ -6,6 +6,26 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--dir", "web", "dev"],
       "port": 3000
+    },
+    {
+      "name": "web-local-agent",
+      "runtimeExecutable": "pwsh",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:LIVEKIT_AGENT_NAME='smjar-dev'; pnpm --dir web dev"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "agent-local",
+      "runtimeExecutable": "pwsh",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:LIVEKIT_AGENT_NAME='smjar-dev'; $env:LIVEKIT_AGENT_PORT='8081'; $env:PYTHONUTF8='1'; Set-Location agent; uv run python -m livekit.agents start --dev main.py"
+      ],
+      "port": 8081
     }
   ]
 }

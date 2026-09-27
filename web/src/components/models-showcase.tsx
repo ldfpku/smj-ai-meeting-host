@@ -31,7 +31,7 @@ export function ModelsShowcase({ onSelectModel, currentModel, onOpenChange }: Mo
 
   const getCategoryDescription = (category: ModelCategory) => {
     if (category === ModelCategory.NATIVE_AUDIO) {
-      return "语音最自然，支持情绪感知对话、主动发声与思考能力";
+      return "模型直接听、直接说，语音最自然；3.8 系列可在讨论切题时保持静默";
     }
     return "级联架构，在生产环境中性能与可靠性更佳，尤其适合工具调用场景";
   };

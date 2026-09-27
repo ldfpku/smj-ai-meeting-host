@@ -15,7 +15,7 @@ import {
   defaultPlaygroundState,
 } from "@/data/playground-state";
 import { playgroundStateHelpers } from "@/lib/playground-state-helpers";
-import { ModelId } from "@/data/models";
+import { ModelId, normalizeModelId } from "@/data/models";
 
 import { Preset, defaultPresets } from "@/data/presets";
 
@@ -256,7 +256,12 @@ export const PlaygroundStateProvider = ({
           name: urlData.preset.name || "分享的预设",
           description: urlData.preset.description,
           instructions: urlData.state.instructions || "",
-          sessionConfig: urlData.state.sessionConfig || defaultSessionConfig,
+          // 分享链接只带与默认值不同的字段，且可能指向已下线的模型
+          sessionConfig: {
+            ...defaultSessionConfig,
+            ...urlData.state.sessionConfig,
+            model: normalizeModelId(urlData.state.sessionConfig?.model),
+          },
           defaultGroup: undefined,
         };
 

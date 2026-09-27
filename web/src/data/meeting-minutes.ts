@@ -79,11 +79,43 @@ function openItemBlock(o: OpenItem, idx: number): string {
   ].join("\n");
 }
 
+/**
+ * AI 从转写中整理出的内容（/api/minutes 返回）。
+ *
+ * 决议与未决事项不在其中：那两项以会上主持人当场登记、参会人当场确认过的
+ * 记录为准，AI 事后从转写里"读出来"的只能算线索。
+ */
+export interface AiMinutes {
+  overallSummary: string;
+  agendas: {
+    title: string;
+    discussionPoints: string[];
+    conclusion: string;
+  }[];
+  /** 转写中提到、但会上没有登记为决议的行动项 */
+  actionItems: {
+    content: string;
+    owner: string;
+    due: string;
+    agendaTitle: string;
+  }[];
+  /** 转写中提到、但会上没有登记的悬而未决的问题 */
+  openIssues: { issue: string; reason: string }[];
+  timeline: { time: string; event: string }[];
+}
+
 export interface MinutesInput {
   config: MeetingConfig;
-  liveState: MeetingLiveState;
+  liveState: Pick<
+    MeetingLiveState,
+    "decisions" | "openItems" | "currentAgendaIndex"
+  >;
   elapsedSeconds: number;
   now?: Date;
+  /** 有 AI 整理结果时填充讨论要点、时间线等；没有时保持人工补充的占位 */
+  ai?: AiMinutes;
+  /** 整理这份内容的模型，写进纪要供校对人参考，如「公司 AI 网关（glm-5.3-flash）」 */
+  aiSource?: string;
 }
 
 export function generateMinutesMarkdown({
@@ -91,6 +123,8 @@ export function generateMinutesMarkdown({
   liveState,
   elapsedSeconds,
   now = new Date(),
+  ai,
+  aiSource,
 }: MinutesInput): string {
   const { decisions, openItems } = liveState;
   const completeCount = decisions.filter(
@@ -118,6 +152,20 @@ export function generateMinutesMarkdown({
   lines.push(`| 记录人 | （综合管理部·行政后勤专员） |`);
   lines.push("");
 
+  if (ai) {
+    lines.push(
+      `> 本纪要中的会议概要、讨论要点、待确认事项与时间线由 AI${
+        aiSource ? `（${aiSource}）` : ""
+      }根据会议转写整理，` +
+        "**须经记录人校对后方可发布**。决议事项与未决事项为会上当场登记的记录。"
+    );
+    lines.push("");
+    if (ai.overallSummary.trim()) {
+      lines.push(`**会议概要**：${ai.overallSummary.trim()}`);
+      lines.push("");
+    }
+  }
+
   lines.push("## 二、参会人");
   lines.push("");
   lines.push(...attendeeLines(config));
@@ -130,14 +178,33 @@ export function generateMinutesMarkdown({
   config.agendas.forEach((item, idx) => {
     const isDone = idx < liveState.currentAgendaIndex;
     const isCur = idx === liveState.currentAgendaIndex;
-    const status = isDone ? "已完成" : isCur ? "进行中" : "未进行";
+    // 纪要是会后生成的：停在最后一项议题上、且该议题已有决议或未决事项，就是谈完了
+    const hasOutcome =
+      decisions.some((d) => d.agendaTitle === item.title) ||
+      openItems.some((o) => o.agendaTitle === item.title);
+    const status =
+      isDone || (isCur && hasOutcome) ? "已完成" : isCur ? "进行中" : "未进行";
     lines.push(`### 议题 ${idx + 1}：${item.title}　【${status}】`);
     lines.push("");
     lines.push(`- 目标：${item.goal}`);
     lines.push(`- 计划用时：${item.durationMinutes} 分钟`);
     if (item.processId) lines.push(`- 关联流程：${item.processId}`);
     lines.push(`- 前置材料（提前 24 小时下发）：${item.preReadRef || "无"}`);
-    lines.push(`- 讨论要点：（待记录人补充）`);
+    const aiAgenda = ai?.agendas.find((a) => a.title === item.title);
+    const points = (aiAgenda?.discussionPoints ?? []).filter((p) => p.trim());
+    if (points.length) {
+      lines.push(`- 讨论要点：`);
+      points.forEach((p) => lines.push(`  - ${p.trim()}`));
+      if (aiAgenda?.conclusion.trim()) {
+        lines.push(`- 讨论结论：${aiAgenda.conclusion.trim()}`);
+      }
+    } else {
+      lines.push(
+        ai
+          ? `- 讨论要点：（转写中未见本议题的讨论内容，待记录人补充）`
+          : `- 讨论要点：（待记录人补充）`
+      );
+    }
 
     const own = decisions.filter((d) => d.agendaTitle === item.title);
     if (own.length) {
@@ -181,6 +248,38 @@ export function generateMinutesMarkdown({
     `> 本会默认升级路径：${config.escalationPath || "提请总经理签批并留档"}`
   );
   lines.push("");
+
+  if (ai && (ai.actionItems.length || ai.openIssues.length)) {
+    lines.push("### AI 从转写中提取的待确认事项");
+    lines.push("");
+    lines.push(
+      "以下内容在讨论中被提到，但会上**没有登记**为决议或未决事项。请记录人逐条核实：" +
+        "属实的补登到上面两节并补齐四要素，不属实的删除。"
+    );
+    lines.push("");
+    ai.actionItems.forEach((item, i) => {
+      lines.push(`${i + 1}. 【待确认·行动项】${item.content}`);
+      lines.push(`   - 责任人：${item.owner || "未提及"}`);
+      lines.push(`   - 完成时限：${item.due || "未提及"}`);
+      if (item.agendaTitle) lines.push(`   - 所属议题：${item.agendaTitle}`);
+    });
+    ai.openIssues.forEach((item, i) => {
+      lines.push(
+        `${ai.actionItems.length + i + 1}. 【待确认·未决问题】${item.issue}`
+      );
+      if (item.reason) lines.push(`   - 未决原因：${item.reason}`);
+    });
+    lines.push("");
+  }
+
+  if (ai && ai.timeline.length) {
+    lines.push("### 会议时间线");
+    lines.push("");
+    ai.timeline.forEach((entry) => {
+      lines.push(`- ${entry.time}　${entry.event}`);
+    });
+    lines.push("");
+  }
 
   lines.push("## 六、下次会议");
   lines.push("");

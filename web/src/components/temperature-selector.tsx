@@ -18,6 +18,7 @@ import {
   ConfigurationFormSchema,
 } from "@/components/configuration-form";
 import { Input } from "@/components/ui/input";
+import { modelsData, normalizeModelId } from "@/data/models";
 import { z } from "zod";
 
 const getMinMaxForField = (schema: z.ZodNumber) => {
@@ -35,6 +36,20 @@ export function TemperatureSelector({
   const { minValue, maxValue } = getMinMaxForField(
     ConfigurationFormSchema.shape.temperature,
   );
+  const model = modelsData[normalizeModelId(form.watch("model"))];
+
+  // Gemini 3.8 Live 不接受温度参数，agent 也不会把它发给模型
+  if (!model.supportsTemperature) {
+    return (
+      <div className="pb-2 px-1">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-fg1">温度</span>
+          <span className="text-sm text-fg2">由模型自动控制</span>
+        </div>
+        <p className="text-xs text-fg2 mt-1">{model.name} 不支持调整温度。</p>
+      </div>
+    );
+  }
 
   return (
     <div

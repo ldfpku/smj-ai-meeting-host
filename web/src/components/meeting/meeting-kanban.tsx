@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect } from "react";
 import {
+  InterventionMode,
   MeetingConfig,
   MeetingLiveState,
+  defaultInterventionSettings,
   playAttentionChime,
   missingDecisionFields,
 } from "@/data/meeting";
@@ -11,6 +13,12 @@ import {
   generateMinutesMarkdown,
   minutesFileName,
 } from "@/data/meeting-minutes";
+import {
+  MinutesDialog,
+  MinutesSource,
+} from "@/components/meeting/minutes-dialog";
+import SegmentedControl from "@/components/ui/segmented-control";
+import { usePlaygroundState } from "@/hooks/use-playground-state";
 import {
   Clock,
   CheckCircle2,
@@ -30,6 +38,8 @@ import {
   Megaphone,
   HelpCircle,
   ArrowUpCircle,
+  Sparkles,
+  Radar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -57,7 +67,9 @@ export function MeetingKanban({
 }: MeetingKanbanProps) {
   const { toast } = useToast();
   const room = useRoomContext();
-  const { agent } = useAgent();
+  const { agent, transcript } = useAgent();
+  const { dispatch } = usePlaygroundState();
+  const [showMinutesDialog, setShowMinutesDialog] = useState(false);
 
   // Local seconds counter for smooth visual countdown
   const [localSeconds, setLocalSeconds] = useState(liveState.elapsedSeconds || 0);
@@ -161,10 +173,44 @@ export function MeetingKanban({
     if (ok) {
       toast({
         title: "已呼叫主持人即刻介入",
-        description: "AI 主持人将强行打断发言并收拢全场讨论。",
+        description: "AI 主持人会打断发言，把讨论拉回当前议题。",
       });
     }
   };
+
+  // ---- 跑题介入：模式切换与实时置信度 -------------------------------------
+
+  // 会中以 agent 实际生效的设置为准，会前以会议配置为准
+  const intervention = isConnectingOrConnected
+    ? liveState.intervention
+    : { ...defaultInterventionSettings, ...config.intervention };
+
+  const handleModeChange = async (mode: string) => {
+    if (mode !== "auto" && mode !== "semi_auto") return;
+    if (mode === intervention.mode) return;
+    const next = { ...intervention, mode: mode as InterventionMode };
+
+    if (isConnectingOrConnected) {
+      const ok = await callAgent("pg.updateIntervention", { mode });
+      if (!ok) return;
+    }
+    // 同步回会议配置：下次开会沿用，且配置表单不会把它当成一次新的改动
+    dispatch({
+      type: "SET_SESSION_CONFIG",
+      payload: { meetingConfig: { ...config, intervention: next } },
+    });
+    toast({
+      title: mode === "auto" ? "已切换为自动打断" : "已切换为半自动",
+      description:
+        mode === "auto"
+          ? "检测到跑题时，AI 主持人会直接打断。"
+          : "检测到跑题时只在看板上提示，由你决定是否打断。",
+    });
+  };
+
+  const score = liveState.driftScore;
+  // 超过 15 秒没有新判断，说明没人在说话，读数已经过期
+  const scoreIsFresh = !!score && Date.now() - score.at < 15_000;
 
   const buildMinutes = () =>
     generateMinutesMarkdown({
@@ -172,6 +218,14 @@ export function MeetingKanban({
       liveState,
       elapsedSeconds: localSeconds,
     });
+
+  const getMinutesSource = (): MinutesSource => ({
+    config,
+    liveState,
+    elapsedSeconds: localSeconds,
+    transcript: transcript.map((t) => ({ role: t.role, text: t.text, at: t.at })),
+    startedAt: liveState.startTime,
+  });
 
   const handleCopyMinutes = () => {
     navigator.clipboard.writeText(buildMinutes());
@@ -243,17 +297,31 @@ export function MeetingKanban({
             <Copy className="w-3.5 h-3.5" />
           </Button>
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon"
             onClick={handleDownloadMinutes}
-            className="h-8 gap-1 text-xs"
-            title="导出会议纪要 Markdown 文件"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            title="导出模板纪要（Markdown 文件，不含 AI 整理内容）"
           >
             <Download className="w-3.5 h-3.5" />
-            导出纪要
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => setShowMinutesDialog(true)}
+            className="h-8 gap-1 text-xs"
+            title="由 AI 根据会议转写整理讨论要点，生成可编辑的纪要草稿"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            AI 纪要
           </Button>
         </div>
       </div>
+
+      <MinutesDialog
+        open={showMinutesDialog}
+        onOpenChange={setShowMinutesDialog}
+        getSource={getMinutesSource}
+      />
 
       {/* 时间仪表盘 */}
       <div className="space-y-2 bg-muted/30 p-3 rounded-lg border border-border/40">
@@ -293,6 +361,68 @@ export function MeetingKanban({
               : ""
           }`}
         />
+      </div>
+
+      {/* 跑题介入：模式与实时偏题概率 */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2 rounded-lg border border-border/40 bg-muted/20">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            跑题介入
+          </span>
+          <SegmentedControl
+            value={intervention.mode}
+            onValueChange={handleModeChange}
+            options={[
+              { value: "auto", label: "自动打断" },
+              { value: "semi_auto", label: "半自动" },
+            ]}
+            className="w-[168px]"
+          />
+        </div>
+
+        <div
+          className="flex items-center gap-2 text-[11px] text-muted-foreground"
+          title={
+            liveState.detectorActive
+              ? `Jev 每隔约 1 秒判断一次最近的发言。偏题概率达到 ${Math.round(
+                  intervention.threshold * 100
+                )}% 即${intervention.mode === "auto" ? "打断" : "提示"}。`
+              : "agent 未配置 JEV_API_KEY：跑题只靠 AI 主持人自行判断，没有置信度读数。"
+          }
+        >
+          <Radar className="w-3.5 h-3.5 flex-shrink-0" />
+          {!isConnectingOrConnected ? (
+            <span>
+              阈值 {Math.round(intervention.threshold * 100)}% · 冷却{" "}
+              {intervention.cooldownSeconds} 秒
+            </span>
+          ) : !liveState.detectorActive ? (
+            <span>未启用 Jev 检测</span>
+          ) : (
+            <>
+              <span className="whitespace-nowrap">偏题概率</span>
+              <span className="relative w-24 h-1.5 rounded-full bg-muted overflow-hidden">
+                <span
+                  className={`block h-full rounded-full transition-all duration-300 ${
+                    scoreIsFresh && score!.confidence >= intervention.threshold
+                      ? "bg-amber-500"
+                      : "bg-emerald-500"
+                  }`}
+                  style={{
+                    width: `${scoreIsFresh ? Math.round(score!.confidence * 100) : 0}%`,
+                  }}
+                />
+                <span
+                  className="absolute top-0 h-full w-px bg-foreground/50"
+                  style={{ left: `${Math.round(intervention.threshold * 100)}%` }}
+                />
+              </span>
+              <span className="tabular-nums w-8 text-right">
+                {scoreIsFresh ? `${Math.round(score!.confidence * 100)}%` : "—"}
+              </span>
+            </>
+          )}
+        </div>
       </div>
 
       {/* 当前议题高亮卡片 */}

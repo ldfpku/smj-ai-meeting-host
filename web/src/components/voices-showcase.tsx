@@ -179,10 +179,10 @@ export function VoicesShowcase({
 
         <div className="px-6 py-4 border-t border-separator1 bg-bg1 space-y-1.5">
           <p className="text-xs text-fg2">
-            试听示例：「{VOICE_PREVIEW_TEXT}」
+            试听示例：{VOICE_PREVIEW_TEXT}
           </p>
           <p className="text-xs text-fg3">
-            示例台词取自主持人叫停跑题的实际场景，便于判断这个音色够不够有权威感。
+            示例台词取自主持人打断跑题的实际场景，便于判断这个音色够不够有权威感。
             每个音色首次试听会调用一次 Gemini 语音合成并缓存到本地，之后再听不再消耗额度。
           </p>
         </div>

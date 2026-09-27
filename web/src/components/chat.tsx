@@ -9,64 +9,42 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   useConnectionState,
   useVoiceAssistant,
-  useRoomContext,
 } from "@livekit/components-react";
-import { Button } from "@/components/ui/button";
 import { ChatControls } from "@/components/chat-controls";
 import { useAgent } from "@/hooks/use-agent";
 import { useConnection } from "@/hooks/use-connection";
 import { toast } from "@/hooks/use-toast";
 import { SmjarVisualizer } from "@/components/visualizer/smjar-visualizer";
-import { NanoBananaFeed } from "@/components/nano-banana-feed";
 import { MeetingKanban } from "@/components/meeting/meeting-kanban";
 import { MeetingConfigModal } from "@/components/meeting/meeting-config-modal";
-import { defaultMeetingConfig, playAttentionChime } from "@/data/meeting";
+import { MeetingAlerts } from "@/components/meeting/meeting-alerts";
+import { TranscriptPanel } from "@/components/meeting/transcript-panel";
+import {
+  MinutesDialog,
+  MinutesSource,
+} from "@/components/meeting/minutes-dialog";
+import { defaultMeetingConfig } from "@/data/meeting";
+import { meetingStore } from "@/lib/meeting-store";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
 
 export function Chat() {
   const connectionState = useConnectionState();
   const { audioTrack, state } = useVoiceAssistant();
   const [isChatRunning, setIsChatRunning] = useState(false);
-  const { agent, meetingLiveState, updateMeetingLiveState } = useAgent();
+  const {
+    agent,
+    meetingLiveState,
+    updateMeetingLiveState,
+    transcript,
+    previousSession,
+  } = useAgent();
   const { disconnect } = useConnection();
   const { pgState } = usePlaygroundState();
   const [isEditingInstructions, setIsEditingInstructions] = useState(false);
   const [showMeetingConfigModal, setShowMeetingConfigModal] = useState(false);
+  const [showPreviousMinutes, setShowPreviousMinutes] = useState(false);
   // 以「是否配置了会议」为准，而非预设 id：把会议配置挂到别的预设上时也应渲染看板
   const isMeetingPreset = !!pgState.sessionConfig.meetingConfig;
-  const room = useRoomContext();
-
-  const handleForceIntervene = async () => {
-    playAttentionChime();
-    // performRpc 需要具体的目标身份；此前传空串会直接抛错并被吞掉，
-    // 结果是按钮看似生效、agent 端其实从未收到。
-    if (!room?.localParticipant || !agent?.identity) {
-      toast({
-        title: "主持人尚未就位",
-        description: "AI 主持人还没有连接到会议，请稍候重试。",
-        variant: "destructive",
-      });
-      return;
-    }
-    try {
-      await room.localParticipant.performRpc({
-        destinationIdentity: agent.identity,
-        method: "pg.forceIntervene",
-        payload: JSON.stringify({ reason: "参会人手动呼叫主持人介入纠偏" }),
-      });
-      toast({
-        title: "已呼叫主持人即刻介入",
-        description: "AI 主持人将强行打断发言并收拢全场讨论。",
-      });
-    } catch (err) {
-      console.error("forceIntervene RPC failed", err);
-      toast({
-        title: "呼叫主持人失败",
-        description: "未能把纠偏指令送达 AI 主持人，请重试。",
-        variant: "destructive",
-      });
-    }
-  };
 
   const [hasSeenAgent, setHasSeenAgent] = useState(false);
 
@@ -136,6 +114,30 @@ export function Chat() {
     </div>
   );
 
+  // 会议模式下左栏还要放转写面板，可视化区域收矮一些
+  const renderMeetingVisualizer = () => (
+    <div className="h-[200px] xl:h-[240px] w-full">
+      <SmjarVisualizer
+        key={audioTrack?.publication?.trackSid || 'no-track'}
+        agentState={state}
+        agentTrackRef={audioTrack}
+      />
+    </div>
+  );
+
+  // 上一场会议的纪要：数据来自本机保存的记录
+  const loadPreviousSession = async (): Promise<MinutesSource> => {
+    const session = previousSession!;
+    const segments = await meetingStore.getSegments(session.id);
+    return {
+      config: session.config,
+      liveState: session.liveState,
+      elapsedSeconds: session.liveState.elapsedSeconds,
+      transcript: segments.map((s) => ({ role: s.role, text: s.text, at: s.at })),
+      startedAt: session.startedAt,
+    };
+  };
+
   const renderConnectionControl = () => (
     <AnimatePresence mode="wait">
       <motion.div
@@ -159,29 +161,11 @@ export function Chat() {
       />
       <div className="flex flex-col flex-grow items-center lg:justify-between mt-12 lg:mt-0 min-w-0 w-full">
         <div className="w-full h-full flex flex-col min-w-0 gap-4">
-          {/* 跑题早期介入黄灯预警 Banner */}
-          {isMeetingPreset && meetingLiveState.driftWarning && (
-            <div className="w-full py-2 px-3 sm:px-4 bg-amber-500/15 border border-amber-500/40 rounded-lg flex items-center justify-between text-amber-600 dark:text-amber-400 text-xs font-semibold shadow-sm">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="truncate">⚠️ 跑题黄灯预警：AI 主持人检测到讨论疑似偏离当前议题，请注意聚焦！</span>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  className="h-6 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white font-medium flex items-center gap-1"
-                  onClick={handleForceIntervene}
-                >
-                  ⚡ 呼叫主持即刻打断
-                </Button>
-                <button
-                  onClick={() => updateMeetingLiveState({ driftWarning: false })}
-                  className="underline hover:opacity-80 text-muted-foreground ml-1 text-xs"
-                >
-                  忽略
-                </button>
-              </div>
-            </div>
+          {/* 跑题打断 / 半自动建议 / 议题超时 / 上一场会议记录 */}
+          {isMeetingPreset && (
+            <MeetingAlerts
+              onOpenPreviousSession={() => setShowPreviousMinutes(true)}
+            />
           )}
 
           {/* 会议主持人模式：双栏看板布局 */}
@@ -191,6 +175,11 @@ export function Chat() {
               <div className="lg:hidden w-full min-w-0 flex flex-col gap-4 overflow-y-auto">
                 <Instructions />
                 {renderVisualizer()}
+                <TranscriptPanel
+                  transcript={transcript}
+                  startedAt={meetingLiveState.startTime}
+                  className="h-[240px] flex-shrink-0"
+                />
                 <div className="h-[480px]">
                   <MeetingKanban
                     config={pgState.sessionConfig.meetingConfig || defaultMeetingConfig}
@@ -223,15 +212,20 @@ export function Chat() {
 
               {/* Desktop: 左右双栏布局 */}
               <div className="hidden lg:grid lg:grid-cols-12 lg:gap-4 lg:h-full lg:min-w-0 w-full overflow-hidden">
-                <div className="lg:col-span-5 flex flex-col h-full min-w-0 justify-between">
+                <div className="lg:col-span-5 flex flex-col h-full min-h-0 min-w-0 gap-3">
                   <div className="flex items-center justify-center w-full min-w-0">
                     <Instructions />
                   </div>
-                  <div className="grow h-full flex items-center justify-center min-w-0">
+                  <div className="flex-shrink-0 flex items-center justify-center min-w-0">
                     <div className="w-full min-w-0">
-                      {!isEditingInstructions && renderVisualizer()}
+                      {!isEditingInstructions && renderMeetingVisualizer()}
                     </div>
                   </div>
+                  <TranscriptPanel
+                    transcript={transcript}
+                    startedAt={meetingLiveState.startTime}
+                    className="flex-1"
+                  />
                 </div>
                 <div className="lg:col-span-7 h-full min-h-0 overflow-hidden">
                   <MeetingKanban
@@ -284,8 +278,6 @@ export function Chat() {
               </div>
             </>
           )}
-
-          <NanoBananaFeed />
         </div>
 
         <div className="my-4">{renderConnectionControl()}</div>
@@ -295,6 +287,13 @@ export function Chat() {
         open={showMeetingConfigModal}
         onOpenChange={setShowMeetingConfigModal}
       />
+      {previousSession && (
+        <MinutesDialog
+          open={showPreviousMinutes}
+          onOpenChange={setShowPreviousMinutes}
+          getSource={loadPreviousSession}
+        />
+      )}
     </div>
   );
 }

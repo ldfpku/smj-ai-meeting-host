@@ -40,12 +40,15 @@ winget install LiveKit.LiveKitCLI
 uv sync
 ```
 
-4. Create `.env.local` with your LiveKit secrets, either here in `agent/` or at the repository root (the agent reads both, and the root file is shared with the web frontend):
+4. Create `.env.local` with your secrets, either here in `agent/` or at the repository root (the agent reads both, and the root file is shared with the web frontend):
 ```bash
 LIVEKIT_URL=your_livekit_url
 LIVEKIT_API_KEY=your_api_key
 LIVEKIT_API_SECRET=your_api_secret
+GEMINI_API_KEY=your_gemini_key
+JEV_API_KEY=your_jev_key        # optional: off-topic detection
 ```
+The agent uses its own `GEMINI_API_KEY`. A key typed into the web UI is only used when the agent has none.
 To get these secrets, you can use the LiveKit CLI following the instructions below (steps 1-4).
 
 5. Give `lk` access to the same LiveKit project, once:
@@ -69,6 +72,42 @@ In production the container runs the thin, non-deprecated CLI instead (see `Dock
 ```bash
 python -m livekit.agents start
 ```
+
+If an agent is already deployed to the same LiveKit project, give the local one its own
+name so that your sessions are not dispatched to the deployed agent. Set the same value
+for the web server:
+```bash
+LIVEKIT_AGENT_NAME=smjar-dev
+```
+
+### Tests
+
+```bash
+uv run pytest
+```
+
+The tests cover the model capability table, the intervention gate, the off-topic
+detector (with a stubbed judge), the handling of agenda titles and the prepared audio
+clips. They need no network.
+
+### Simulated meeting
+
+```bash
+uv run python sim/run.py
+uv run python sim/run.py --model gemini-3.1-flash-live-preview
+```
+
+Runs a whole meeting of about three minutes against the running agent, unattended:
+four people (one synthetic voice each) talk into the one microphone of the room, go off
+topic once, agree on a decision, leave one matter open and ask for the summary. The
+script only speaks; interrupting, recording, the roll call, moving on and closing are up
+to the moderator. It ends with a list of checks and writes `report.md`, `minutes.md` and
+`events.json` to `sim/runs/<time>/`.
+
+It needs the agent (`lk agent dev main.py`, with `LIVEKIT_AGENT_NAME=smjar-dev`) and, for
+the minutes, the web app on `http://localhost:3000`. The meeting is described in
+`sim/scenario.json`. Every run uses the real services and costs what a three-minute
+meeting costs.
 
 ## CI/CD Deployment to LiveKit Cloud
 
@@ -106,15 +145,17 @@ lk cloud auth
    - `LIVEKIT_URL`: Your full LiveKit Cloud URL (e.g., `wss://your-project.livekit.cloud`)
    - `LIVEKIT_API_KEY`: Your LiveKit API key from `.env.local` generated in step 4
    - `LIVEKIT_API_SECRET`: Your LiveKit API secret from `.env.local`
+   - `GEMINI_API_KEY`: the Gemini key the deployed agent uses
+   - `JEV_API_KEY`: the TypeSafe Jev key for the off-topic detection
 
-6. **Configure the workflow** (optional):
+   The workflow hands the last two to the agent as secrets. Without `GEMINI_API_KEY`
+   the deployed agent cannot open a Live session: the key is no longer passed along
+   by the browser.
+
+6. **Run the workflow**:
    
-   The workflow file is located at `.github/workflows/deploy-agent.yml`
-   
-   By default, it deploys when:
-   - Code is pushed to `main` or `master` branch
-   - Files in the `agent/` directory change
-   - Manually triggered via GitHub Actions UI
+   The workflow file is located at `.github/workflows/deploy-agent.yml`.
+   It only runs when triggered manually in the GitHub Actions UI (`workflow_dispatch`).
 
 ### Monitoring
 
@@ -129,6 +170,14 @@ After deployment:
 ```
 agent/
 ├── main.py              # Agent code; exposes the AgentServer `server` that lk runs
+├── model_caps.py        # What each supported Live model accepts
+├── intervention.py      # The gate that decides who may interrupt, and when
+├── drift_detector.py    # Off-topic detection on the transcript (TypeSafe Jev)
+├── fast_transcript.py   # Streaming transcript for the detection (hears mid-sentence)
+├── spoken_clips.py      # Interruptions synthesised ahead of time
+├── direct_voice.py      # Plays them on a track of their own, at once
+├── sim/                 # Simulated meeting (uv run python sim/run.py)
+├── tests/               # Unit tests (uv run pytest)
 ├── pyproject.toml       # Python project & dependencies (uv)
 ├── .python-version      # Python version specification
 ├── Dockerfile          # Docker build configuration

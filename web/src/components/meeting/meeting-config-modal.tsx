@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,9 +19,13 @@ import {
   AgendaItem,
   Attendee,
   MeetingStyle,
+  InterventionMode,
+  InterventionSettings,
+  defaultInterventionSettings,
   defaultMeetingConfig,
   generateMeetingInstructions,
 } from "@/data/meeting";
+import { Slider } from "@/components/ui/slider";
 import {
   MEETING_TEMPLATES,
   templateToConfig,
@@ -70,7 +74,20 @@ export function MeetingConfigModal({
   const [attendees, setAttendees] = useState<Attendee[]>(
     initialConfig.attendees || []
   );
+  const [intervention, setIntervention] = useState<InterventionSettings>({
+    ...defaultInterventionSettings,
+    ...initialConfig.intervention,
+  });
   const [error, setError] = useState<string | null>(null);
+
+  // 介入模式也能在看板上直接切换；每次打开时以当前配置为准，
+  // 否则在这里点保存会把看板上刚改的模式冲回去。
+  const currentIntervention = pgState.sessionConfig.meetingConfig?.intervention;
+  useEffect(() => {
+    if (open) {
+      setIntervention({ ...defaultInterventionSettings, ...currentIntervention });
+    }
+  }, [open, currentIntervention]);
 
   const totalMinutes = agendas.reduce(
     (sum, item) => sum + (Number(item.durationMinutes) || 0),
@@ -156,6 +173,7 @@ export function MeetingConfigModal({
       style,
       requirePreRead,
       escalationPath: escalationPath.trim() || undefined,
+      intervention,
     };
 
     dispatch({
@@ -291,7 +309,7 @@ export function MeetingConfigModal({
             <Label>主持人控场风格</Label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { id: "strict", label: "果断控场型", desc: "跑题即刻强行打断拉回" },
+                { id: "strict", label: "果断控场型", desc: "一跑题就打断并拉回" },
                 { id: "gentle", label: "温和引导型", desc: "委婉提醒、建议式推进" },
                 { id: "concise", label: "极简报时型", desc: "仅关键节点短小报时" },
               ].map((s) => (
@@ -309,6 +327,109 @@ export function MeetingConfigModal({
                   <div className="text-xs text-muted-foreground mt-1">{s.desc}</div>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* 跑题介入设置 */}
+          <div className="space-y-2">
+            <Label>跑题介入</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                {
+                  id: "auto",
+                  label: "自动打断",
+                  desc: "检测到跑题，AI 主持人直接开口打断",
+                },
+                {
+                  id: "semi_auto",
+                  label: "半自动",
+                  desc: "只在看板上提示，由你点击后才打断",
+                },
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() =>
+                    setIntervention({
+                      ...intervention,
+                      mode: m.id as InterventionMode,
+                    })
+                  }
+                  className={`p-3 text-left rounded-lg border transition-all ${
+                    intervention.mode === m.id
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:bg-muted/50"
+                  }`}
+                >
+                  <div className="font-semibold text-sm">{m.label}</div>
+                  <div className="text-xs text-muted-foreground mt-1">{m.desc}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span>偏题概率阈值</span>
+                  <span className="font-medium tabular-nums">
+                    {Math.round(intervention.threshold * 100)}%
+                  </span>
+                </div>
+                <Slider
+                  min={0.6}
+                  max={0.98}
+                  step={0.01}
+                  value={[intervention.threshold]}
+                  onValueChange={(v) =>
+                    setIntervention({ ...intervention, threshold: v[0] })
+                  }
+                  aria-label="偏题概率阈值"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  越高越不容易误打断，也越容易漏掉跑题。
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span>冷却时间</span>
+                  <span className="font-medium tabular-nums">
+                    {intervention.cooldownSeconds} 秒
+                  </span>
+                </div>
+                <Slider
+                  min={15}
+                  max={180}
+                  step={5}
+                  value={[intervention.cooldownSeconds]}
+                  onValueChange={(v) =>
+                    setIntervention({ ...intervention, cooldownSeconds: v[0] })
+                  }
+                  aria-label="冷却时间"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  打断一次后，这段时间内不再自动打断。
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs">判断方式</div>
+                <select
+                  className={selectClass}
+                  value={intervention.consecutiveHits}
+                  onChange={(e) =>
+                    setIntervention({
+                      ...intervention,
+                      consecutiveHits: parseInt(e.target.value) || 1,
+                    })
+                  }
+                  aria-label="判断方式"
+                >
+                  <option value={1}>命中 1 次即介入（最快）</option>
+                  <option value={2}>连续命中 2 次才介入（更稳）</option>
+                </select>
+                <p className="text-[11px] text-muted-foreground">
+                  连续 2 次要多等一轮判断，响应会慢 1–2 秒。
+                </p>
+              </div>
             </div>
           </div>
 

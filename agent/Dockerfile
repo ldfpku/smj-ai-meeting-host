@@ -21,8 +21,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy all project files
 COPY . .
 
-# Install dependencies using uv with proper dependency resolution
-RUN uv pip install --system .
+# Install the dependencies only. The agent is a set of plain modules next to
+# main.py, not a package: building it (`uv pip install .`) makes setuptools
+# refuse the flat layout as soon as there is more than one top-level module.
+RUN uv pip install --system -r pyproject.toml
 
 # Thin (non-deprecated) CLI: discovers the module-level `server` in main.py
 CMD ["python", "-m", "livekit.agents", "start"]

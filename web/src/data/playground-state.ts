@@ -1,7 +1,7 @@
 import { ModalitiesId } from "@/data/modalities";
 import { VoiceId } from "@/data/voices";
 import { Preset } from "./presets";
-import { ModelId } from "./models";
+import { DEFAULT_MODEL_ID, ModelId } from "./models";
 
 import {
   MeetingConfig,
@@ -15,7 +15,6 @@ export interface SessionConfig {
   voice: VoiceId;
   temperature: number;
   maxOutputTokens: number | null;
-  nanoBananaEnabled: boolean;
   meetingConfig?: MeetingConfig;
 }
 
@@ -30,12 +29,11 @@ export interface PlaygroundState {
 }
 
 export const defaultSessionConfig: SessionConfig = {
-  model: ModelId.GEMINI_3_1_FLASH_LIVE_PREVIEW,
+  model: DEFAULT_MODEL_ID,
   modalities: ModalitiesId.AUDIO_ONLY,
   voice: VoiceId.PUCK,
   temperature: 0.8,
   maxOutputTokens: null,
-  nanoBananaEnabled: false,
 };
 
 // Define the initial state.

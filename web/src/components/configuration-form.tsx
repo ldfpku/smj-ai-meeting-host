@@ -11,7 +11,6 @@ import { ModelId } from "@/data/models";
 import { UseFormReturn } from "react-hook-form";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
 import { useConnection } from "@/hooks/use-connection";
-import { playgroundStateHelpers } from "@/lib/playground-state-helpers";
 import {
   useConnectionState,
   useLocalParticipant,
@@ -23,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ModalitiesId } from "@/data/modalities";
 
 // Configuration changes that require full reconnection instead of hot-reload
-const RECONNECT_REQUIRED_FIELDS = ["voice", "nano_banana_enabled"];
+const RECONNECT_REQUIRED_FIELDS = ["voice"];
 
 export const ConfigurationFormSchema = z.object({
   model: z.nativeEnum(ModelId),
@@ -31,7 +30,6 @@ export const ConfigurationFormSchema = z.object({
   voice: z.nativeEnum(VoiceId),
   temperature: z.number().min(0.6).max(1.2),
   maxOutputTokens: z.number().nullable(),
-  nanoBananaEnabled: z.boolean(),
 });
 
 export interface ConfigurationFormFieldProps {
@@ -53,6 +51,8 @@ export function ConfigurationForm() {
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Ref to track timeout
   const hasConnectedOnceRef = useRef(false); // Track if we've connected once
   const isReconnectingRef = useRef(false); // Track if we're currently reconnecting to prevent loops
+  // The config the agent is currently running with
+  const lastSentRef = useRef<{ [key: string]: string | number | boolean } | null>(null);
   const { toast } = useToast();
   const { agent } = useVoiceAssistant();
 
@@ -64,18 +64,20 @@ export function ConfigurationForm() {
     }
 
     const values = pgState.sessionConfig;
-    const fullInstructions = playgroundStateHelpers.getFullInstructions(pgState);
     const attributes: { [key: string]: string | number | boolean } = {
-      gemini_api_key: pgState.geminiAPIKey || "",
-      instructions: fullInstructions,
+      instructions: pgState.instructions,
       model: values.model,
       voice: values.voice,
       modalities: values.modalities,
       temperature: values.temperature,
       max_output_tokens: values.maxOutputTokens || "",
-      nano_banana_enabled: values.nanoBananaEnabled,
       meeting_config: values.meetingConfig ? JSON.stringify(values.meetingConfig) : "",
     };
+    // 只有用户在界面里填过密钥才带上；密钥配在服务端时这里没有值，
+    // 发一个空串过去会把 agent 正在用的密钥冲掉。
+    if (pgState.geminiAPIKey) {
+      attributes.gemini_api_key = pgState.geminiAPIKey;
+    }
     if (!agent?.identity) {
       return;
     }
@@ -84,14 +86,18 @@ export function ConfigurationForm() {
     // (config was already sent via token)
     if (!hasConnectedOnceRef.current) {
       hasConnectedOnceRef.current = true;
+      lastSentRef.current = attributes;
       return;
     }
 
-    // Check if any attributes have changed
-    // Convert both to strings for comparison since attributes are stored as strings
-    const hasChanges = Object.keys(attributes).some(
-      (key) => String(attributes[key]) !== String(localParticipant.attributes[key])
-    );
+    // 与「上一次已经生效的配置」比较。配置是随 token 的 metadata 下发的，
+    // 从未写进 participant attributes；拿 attributes 做比较时每个字段都是
+    // undefined，于是任何改动都会被判成「音色变了」而整场重连。
+    const lastSent = lastSentRef.current ?? {};
+    const changed = (key: string) =>
+      String(attributes[key] ?? "") !== String(lastSent[key] ?? "");
+
+    const hasChanges = Object.keys(attributes).some(changed);
 
     if (!hasChanges) {
       console.log("no changes");
@@ -99,12 +105,7 @@ export function ConfigurationForm() {
     }
 
     // Check if any critical fields changed that require full reconnection
-    const hasCriticalChanges = RECONNECT_REQUIRED_FIELDS.some(
-      (key) => String(attributes[key]) !== String(localParticipant.attributes[key])
-    );
-
-    //const listOfThingsThatChanged = Object.keys(attributes).filter(key => String(attributes[key]) !== String(localParticipant.attributes[key]));
-    //console.log("listOfThingsThatChanged: ", listOfThingsThatChanged);
+    const hasCriticalChanges = RECONNECT_REQUIRED_FIELDS.some(changed);
 
     if (hasCriticalChanges) {
       console.log("Critical config change detected, triggering reconnection...");
@@ -153,8 +154,10 @@ export function ConfigurationForm() {
         payload: JSON.stringify(attributes),
       });
       console.log("pg.updateConfig", response);
+      lastSentRef.current = attributes;
       let responseObj = JSON.parse(response);
-      if (responseObj.changed) {
+      // 只改了介入设置时 agent 原地生效（restarted=false），那条提示由看板给出
+      if (responseObj.changed && responseObj.restarted !== false) {
         toast({
           title: "配置已更新",
           variant: "success",
@@ -194,6 +197,7 @@ export function ConfigurationForm() {
   useEffect(() => {
     if (connectionState !== ConnectionState.Connected) {
       hasConnectedOnceRef.current = false;
+      lastSentRef.current = null;
       // Don't reset isReconnectingRef here - it's managed by the reconnection flow
     }
   }, [connectionState]);

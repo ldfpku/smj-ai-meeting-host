@@ -4,6 +4,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { VOICE_PREVIEW_TEXT } from "@/data/voice-preview";
 import { proxyFetch } from "@/lib/proxy-fetch";
+import { ensureWav } from "@/lib/wav";
 
 // 密钥放在仓库根目录的 .env.local（与 /api/token 一致），Next 默认只读 web/.env.local
 dotenv.config({ path: path.join(process.cwd(), "../.env.local") });
@@ -13,19 +14,21 @@ dotenv.config({ path: path.join(process.cwd(), "../.env.local") });
  *
  * 走服务端代理而不是浏览器直连 Google：避开跨域，且密钥不必进入浏览器。
  *
- * 返回形态已用真实请求核对（不是照抄文档）：
+ * 返回形态：
  *   steps[].type === "model_output"
- *     └─ content[].type === "audio"
- *          { data: <base64 裸 PCM>, mime_type: "audio/l16; rate=24000; channels=1",
- *            sample_rate: 24000, channels: 1 }
- * 裸 PCM 需要补 WAV 头浏览器才能播。
+ *     └─ content[].type === "audio" { data: <base64>, mime_type, ... }
+ * gemini-3.8 的 TTS 对普通请求返回带头的完整 WAV（audio/wav）；此前的模型返回
+ * 裸 PCM（audio/l16），需要补 WAV 头浏览器才能播。两种都由 ensureWav 兜住。
  */
 
-const TTS_MODEL = "gemini-3.1-flash-tts-preview";
+// 更便宜的备选：gemini-3.8-flash-lite-tts
+const TTS_MODEL = process.env.GEMINI_TTS_MODEL?.trim() || "gemini-3.8-flash-tts";
 const TTS_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
 const DEFAULT_SAMPLE_RATE = 24000;
 const DEFAULT_CHANNELS = 1;
+/** 本接口使用服务端密钥且没有登录校验，不接受过长的文本 */
+const MAX_TEXT_LENGTH = 300;
 
 interface ExtractedAudio {
   data?: string;
@@ -91,8 +94,12 @@ const CACHE_DIR = path.join(process.cwd(), ".cache", "voice-previews");
 
 function cacheFileFor(voice: string, text: string): string {
   const textHash = createHash("sha1").update(text).digest("hex").slice(0, 8);
-  const safeVoice = voice.replace(/[^A-Za-z0-9_-]/g, "");
-  return path.join(CACHE_DIR, `${safeVoice}-${textHash}.wav`);
+  const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, "");
+  // 文件名带上模型：换了 TTS 模型后音色听感不同，不能继续放旧模型合成的示例
+  return path.join(
+    CACHE_DIR,
+    `${safe(voice)}-${safe(TTS_MODEL)}-${textHash}.wav`
+  );
 }
 
 async function readCache(file: string): Promise<Buffer | null> {
@@ -125,30 +132,6 @@ function wavResponse(wav: Buffer, cacheHit: boolean): Response {
   });
 }
 
-/** 给裸 PCM 套上 44 字节 WAV 头 */
-function pcmToWav(pcm: Buffer, sampleRate: number, channels: number): Buffer {
-  const bitsPerSample = 16;
-  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
-  const blockAlign = (channels * bitsPerSample) / 8;
-
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
-  header.write("WAVE", 8);
-  header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // PCM
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(bitsPerSample, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-
-  return Buffer.concat([header, pcm]);
-}
-
 export async function POST(request: Request) {
   let body: { apiKey?: string; voice?: string; text?: string };
   try {
@@ -162,6 +145,12 @@ export async function POST(request: Request) {
 
   if (!voice) {
     return Response.json({ error: "缺少音色名称" }, { status: 400 });
+  }
+  if (text.length > MAX_TEXT_LENGTH) {
+    return Response.json(
+      { error: `试听文本过长（上限 ${MAX_TEXT_LENGTH} 字）。` },
+      { status: 400 }
+    );
   }
 
   // 先查磁盘缓存：命中就不需要密钥，也不产生任何 API 调用
@@ -238,10 +227,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const wav = pcmToWav(
-    Buffer.from(data, "base64"),
-    sampleRate || DEFAULT_SAMPLE_RATE,
-    channels || DEFAULT_CHANNELS
+  const wav = Buffer.from(
+    ensureWav(
+      Buffer.from(data, "base64"),
+      sampleRate || DEFAULT_SAMPLE_RATE,
+      channels || DEFAULT_CHANNELS
+    )
   );
   await writeCache(cacheFile, wav);
 

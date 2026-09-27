@@ -1,0 +1,131 @@
+{
+  "config": {
+    "topic": "注塑车间质量周会",
+    "meetingType": "质量例会",
+    "chair": "生产制造部部长",
+    "totalDurationMinutes": 3,
+    "style": "strict",
+    "escalationPath": "提请总经理签批并留档",
+    "requirePreRead": false,
+    "attendees": [
+      {
+        "id": "at-wang",
+        "name": "王部长",
+        "dept": "生产制造部",
+        "role": "部长",
+        "required": true
+      },
+      {
+        "id": "at-li",
+        "name": "李工",
+        "dept": "设备科",
+        "role": "设备工程师",
+        "required": true
+      },
+      {
+        "id": "at-zhang",
+        "name": "张经理",
+        "dept": "质量部",
+        "role": "质量经理",
+        "required": false
+      },
+      {
+        "id": "at-chen",
+        "name": "陈主管",
+        "dept": "供应链部",
+        "role": "采购主管",
+        "required": false
+      }
+    ],
+    "agendas": [
+      {
+        "id": "a1",
+        "title": "3 号注塑机良率下降原因分析",
+        "durationMinutes": 2,
+        "goal": "确定良率下降的根本原因并指定整改负责人"
+      },
+      {
+        "id": "a2",
+        "title": "下周排产计划",
+        "durationMinutes": 1,
+        "goal": "确认下周各产线的排产顺序"
+      }
+    ],
+    "intervention": {
+      "mode": "auto",
+      "threshold": 0.85,
+      "cooldownSeconds": 45,
+      "consecutiveHits": 1
+    }
+  },
+  "voices": {
+    "王部长": "Charon",
+    "李工": "Orus",
+    "张经理": "Kore",
+    "陈主管": "Puck"
+  },
+  "answers": {
+    "a1": {
+      "王部长": "我同意这个方案，没有不同意见。",
+      "李工": "我同意，周五下班前我把温控器换好。"
+    },
+    "a2": {
+      "王部长": "我同意记为未决事项，没有其他意见。",
+      "李工": "我也同意，没有意见。"
+    },
+    "default": "我同意，没有不同意见。"
+  },
+  "steps": [
+    {
+      "id": "problem",
+      "say": "王部长",
+      "text": "我先说一下情况。三号注塑机上周的良率从百分之九十六掉到了百分之九十一，报废的主要是缩痕和飞边，这个问题今天必须找到原因。",
+      "then": "next"
+    },
+    {
+      "id": "cause",
+      "say": "李工",
+      "text": "我查了设备记录，三号机的模温波动超过了正负五度，模温机的温控器反应很慢。我判断根本原因是温控器老化，mold temperature 控不住。",
+      "then": "reply"
+    },
+    {
+      "id": "off_topic",
+      "say": "陈主管",
+      "text": "说到这个，下个月公司团建大家想去哪里啊？我觉得去海边不错，可以吃海鲜，上次那家餐厅的螃蟹特别好吃。对了，你们看昨天晚上的球赛了吗，最后那个进球太精彩了，我到现在还在回味。",
+      "expect": "interrupt",
+      "then": "reply"
+    },
+    {
+      "id": "proposal",
+      "say": "张经理",
+      "text": "回到良率的问题，我建议这样定：由设备科李工负责，本周五下班前更换三号机模温机的温控器。验证方式是更换后连续三个班次良率不低于百分之九十六，关闭证据是质量部出具的三个班次良率报表。",
+      "then": "reply"
+    },
+    {
+      "id": "close_1",
+      "say": "王部长",
+      "text": "第一个议题就这样定了，请主持人推进到下一个议题。",
+      "then": "reply",
+      "until": "advance",
+      "retry": "请主持人推进到下一个议题。"
+    },
+    {
+      "id": "plan",
+      "say": "陈主管",
+      "text": "下周排产我建议先排 A 线的出口订单。不过有个问题，原料的到货时间供应商还没有确认，所以排产顺序今天定不下来。",
+      "then": "next"
+    },
+    {
+      "id": "open_item",
+      "say": "张经理",
+      "text": "那这一条今天先不定，记为未决事项，由陈主管跟进，周三之前把原料到货时间确认下来。",
+      "then": "reply"
+    },
+    {
+      "id": "wrap_up",
+      "say": "王部长",
+      "text": "今天的议题都讨论完了，请主持人做个总结，然后结束会议。",
+      "then": "reply"
+    }
+  ]
+}

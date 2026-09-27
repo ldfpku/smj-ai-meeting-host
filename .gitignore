@@ -8,3 +8,7 @@ livekit.toml
 *.egg-info
 __pycache__/
 *.py[cod]
+
+# simulated meetings (agent/sim/run.py)
+agent/sim/.cache/
+agent/sim/runs/

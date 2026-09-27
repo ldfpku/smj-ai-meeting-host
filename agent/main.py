@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
-from ctypes import wintypes
-from io import BytesIO
+import difflib
+import functools
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -13,9 +14,10 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 
-from PIL import Image
+# The agent is a set of plain modules next to this file, not a package.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 from livekit import rtc
 from livekit.agents import (
@@ -35,6 +37,25 @@ from livekit.agents.voice.turn import (
 )
 from livekit.plugins import google
 
+from direct_voice import DirectVoice
+from drift_detector import (
+    REASON_LABELS,
+    DriftDetector,
+    DriftJudgment,
+    DriftResult,
+    JevJudge,
+)
+from fast_transcript import FastTranscript
+from intervention import (
+    INTERRUPTION_REASONS,
+    Intervention,
+    InterventionGate,
+    InterventionSettings,
+    spoken_interruption,
+)
+from model_caps import resolve_model
+from spoken_clips import SpokenClips
+
 # Load .env.local from current directory or parent directory
 load_dotenv(dotenv_path=".env.local")
 load_dotenv(dotenv_path="../.env.local")
@@ -44,26 +65,73 @@ logger.setLevel(logging.INFO)
 
 # Suppress OpenTelemetry attribute warnings
 logging.getLogger("opentelemetry.attributes").setLevel(logging.ERROR)
+# one line per request, and the off-topic check makes a request every second
+for _noisy in ("httpx", "httpx2", "httpcore", "typesafe_sdk"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+#: Name the agent registers under. A developer running the agent locally sets
+#: LIVEKIT_AGENT_NAME (in the agent and the web server) so their sessions are
+#: not dispatched to the deployed agent that shares the LiveKit project.
+AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "").strip() or "gemini-playground"
+
+#: Nobody gets interrupted automatically during the opening announcement.
+OPENING_GRACE_SECONDS = 20.0
+#: A semi-automatic suggestion stays on screen this long.
+SUGGESTION_TTL_SECONDS = 20.0
+#: If a cue produced no speech after this long, fall back once.
+CUE_FALLBACK_SECONDS = 6.0
+#: A Live session that "thinks" for this long is considered stuck.
+DEAF_SECONDS = 30
+STUCK_THINKING_SECONDS = 45.0
+#: Languages spoken in the meetings, as hints for the input transcription.
+FAST_TRANSCRIPT_MODEL = "gemini-3.5-transcribe-live"
+MEETING_LANGUAGE_CODES = ["cmn-Hans-CN", "en-US"]
 
 
-def model_supports_proactive_audio(model: str) -> bool:
-    """Whether the Live model honours ``proactivity`` (proactive audio).
+def resolve_gemini_key(browser_key: str | None = None) -> str:
+    """The Gemini key the agent uses: its own environment first.
 
-    Google documents proactive audio (and affective dialog) as *not supported*
-    on Gemini 3.1 Flash Live; only the 2.5 native-audio models use it. Passing
-    ``proactivity=True`` anyway makes livekit-plugins-google move the whole
-    session onto the ``v1alpha`` API surface for no benefit.
+    The key of the deployment never travels through the browser. A key typed
+    into the UI only counts when the agent has none of its own.
     """
-    return "3.1" not in model
+    return (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_API_KEY", "").strip()
+        or (browser_key or "").strip()
+    )
+
+
+def redact_config_payload(payload: str) -> str:
+    """Config payload for the log: no API key, no full prompt."""
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return "<unparseable payload>"
+    if not isinstance(data, dict):
+        return "<unexpected payload>"
+    shown = {}
+    for key, value in data.items():
+        if key == "gemini_api_key":
+            shown[key] = "<set>" if value else "<empty>"
+        elif key in ("instructions", "meeting_config"):
+            shown[key] = f"<{len(str(value))} chars>"
+        else:
+            shown[key] = value
+    return json.dumps(shown, ensure_ascii=False)
 
 
 #: Cue that makes the moderator deliver the opening announcement. It is worded
-#: as a user-side prompt because on gemini-3.1 it is delivered as realtime text
-#: input (see SessionManager.cue_model), not as model instructions.
+#: as a user-side prompt because it may be delivered as realtime text input
+#: (see SessionManager.cue_model), not as model instructions.
 OPENING_CUE_MEETING = (
     "【系统提示】会议现在开始。请立即按照你的开场要求开口："
     "清晰简短地播报会议名称、总时长与各项议题，然后宣布讨论正式开始。"
     "不要复述本提示。"
+)
+#: Without this the model paraphrases the interruption and keeps adding to it.
+SAY_EXACTLY = (
+    "只说下面引号里的话，照原话说，说完就停。"
+    "不要加别的话，不要解释原因，不要复述本指令。语气平稳、坚定，语速正常。"
 )
 OPENING_CUE_DEFAULT = (
     "Please begin the interaction with the user in a manner consistent with your instructions."
@@ -125,11 +193,24 @@ class SessionConfig:
     temperature: float
     max_response_output_tokens: str | int
     modalities: list[str]
-    nano_banana_enabled: bool = False
     meeting_config: dict | None = None
 
     def to_dict(self):
         return {k: v for k, v in asdict(self).items() if k != "gemini_api_key"}
+
+    def session_fingerprint(self) -> dict:
+        """What the Live session is built from.
+
+        The intervention settings are left out: mode, threshold and cooldown
+        are applied by code, so changing them must not restart the session.
+        """
+        data = self.to_dict()
+        meeting = data.get("meeting_config")
+        if isinstance(meeting, dict):
+            data["meeting_config"] = {
+                k: v for k, v in meeting.items() if k != "intervention"
+            }
+        return data
 
     @staticmethod
     def _modalities_from_string(
@@ -147,15 +228,6 @@ class SessionConfig:
 
 
 def parse_session_config(data: Dict[str, Any]) -> SessionConfig:
-    # Parse nano_banana_enabled - handle both boolean and string types
-    nano_banana_value = data.get("nano_banana_enabled", False)
-    if isinstance(nano_banana_value, bool):
-        nano_banana_enabled = nano_banana_value
-    elif isinstance(nano_banana_value, str):
-        nano_banana_enabled = nano_banana_value.lower() == "true"
-    else:
-        nano_banana_enabled = bool(nano_banana_value)
-
     meeting_config_raw = data.get("meeting_config")
     meeting_config = None
     if isinstance(meeting_config_raw, dict):
@@ -166,12 +238,17 @@ def parse_session_config(data: Dict[str, Any]) -> SessionConfig:
         except Exception:
             meeting_config = None
 
-    logger.debug(f"Parsing config - nano_banana_enabled: {nano_banana_value} -> {nano_banana_enabled}, meeting: {bool(meeting_config)}")
+    requested_model = data.get("model")
+    model, _, replaced = resolve_model(requested_model)
+    if replaced and requested_model:
+        logger.warning(
+            f"model '{requested_model}' is not supported any more, using '{model}'"
+        )
 
     config = SessionConfig(
-        gemini_api_key=data.get("gemini_api_key", ""),
+        gemini_api_key=data.get("gemini_api_key") or "",
         instructions=data.get("instructions", ""),
-        model=data.get("model", "gemini-3.1-flash-live-preview"),
+        model=model,
         voice=data.get("voice", "Puck"),
         temperature=float(data.get("temperature", 0.8)),
         max_response_output_tokens=
@@ -180,7 +257,6 @@ def parse_session_config(data: Dict[str, Any]) -> SessionConfig:
         modalities=SessionConfig._modalities_from_string(
             data.get("modalities", "audio_only")
         ),
-        nano_banana_enabled=nano_banana_enabled,
         meeting_config=meeting_config,
     )
     return config
@@ -189,10 +265,14 @@ def parse_session_config(data: Dict[str, Any]) -> SessionConfig:
 # Module-level AgentServer: `lk agent dev` and `python -m livekit.agents start`
 # import this file and look for an AgentServer named `server`
 # (see livekit.agents.cli.discover), so it has to live at module scope.
-server = AgentServer()
+#
+# LIVEKIT_AGENT_PORT pins the health-check port. In dev mode it is random by
+# default, which tools that wait for a known port cannot work with.
+_agent_port = os.environ.get("LIVEKIT_AGENT_PORT", "").strip()
+server = AgentServer(port=int(_agent_port)) if _agent_port.isdigit() else AgentServer()
 
 
-@server.rtc_session(agent_name="gemini-playground")
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -207,71 +287,17 @@ async def entrypoint(ctx: JobContext):
         metadata = {}
 
     config = parse_session_config(metadata)
+    if not resolve_gemini_key(config.gemini_api_key):
+        logger.error(
+            "no Gemini API key: set GEMINI_API_KEY in the agent's environment "
+            "(.env.local locally, a secret on LiveKit Cloud)"
+        )
 
     session_manager = SessionManager(config)
+    ctx.add_shutdown_callback(session_manager.stop_detector)
     await session_manager.start_session(ctx, participant)
 
     logger.info("agent started")
-
-
-def create_generate_image_tool(session_manager: SessionManager):
-    """Factory function to create the generate_image tool with access to session_manager"""
-
-    raw_schema = {
-        "type": "function",
-        "name": "generate_image",
-        "description": "Generate an image using Nano Banana and send it to the user",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "Detailed, specific description of the image to generate (e.g., 'a labelled cross-section diagram of a progressive cavity drilling motor power section, showing stator elastomer and rotor lobes'), not simply a few words. Not a generic prompt such as 'a diagram' or 'random image'."
-                }
-            },
-            "required": [
-                "prompt"
-            ],
-            "additionalProperties": False
-        }
-    }
-
-    @function_tool(raw_schema=raw_schema)
-    async def generate_image(raw_arguments: dict) -> str:
-        prompt = raw_arguments["prompt"]
-
-        try:
-            client = genai.Client(api_key=session_manager.current_config.gemini_api_key)
-
-            response = await asyncio.to_thread(
-                lambda: client.models.generate_images(
-                    model='imagen-4.0-fast-generate-001',
-                    prompt=prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                        output_mime_type='image/jpeg',
-                    ),
-                )
-            )
-
-            image_bytes = response.generated_images[0].image.image_bytes
-
-            img = Image.open(BytesIO(image_bytes))
-            img.thumbnail((512, 512), Image.Resampling.LANCZOS)
-
-            buffer = BytesIO()
-            img.save(buffer, format='JPEG', quality=90, optimize=True)
-            image_data = buffer.getvalue()
-
-            if session_manager.ctx and session_manager.participant:
-                await session_manager.send_image_to_frontend(prompt, image_data)
-
-            return "I've generated the image and sent it to your screen!"
-        except Exception as e:
-            logger.error(f"Image generation failed: {e}")
-            return f"Sorry, I couldn't generate that image. Error: {str(e)}"
-
-    return generate_image
 
 
 #: 决议四要素——SMJ 要求每条决议都必须带齐，缺一不可（与前端 missingDecisionFields 保持一致）
@@ -294,6 +320,46 @@ def missing_decision_fields(decision: dict) -> list[str]:
     return [label for key, label in DECISION_REQUIRED_FIELDS if _is_blank(decision.get(key))]
 
 
+def logged_tool(fn):
+    """Logs every tool call of the model with its arguments and the answer.
+
+    Without this nothing shows why the moderator did not move on: a refused
+    ``advance_agenda`` looks the same as one that was never called.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(raw_arguments: dict) -> str:
+        result = await fn(raw_arguments)
+        arguments = json.dumps(raw_arguments, ensure_ascii=False)
+        logger.info(f"tool {fn.__name__}({arguments}) -> {result[:160]}")
+        return result
+
+    return wrapper
+
+
+def squash(text: str | None) -> str:
+    """Text with all whitespace removed, for comparing what the model wrote.
+
+    The model hears "3 号注塑机" and writes "3号注塑机" (or the other way
+    round). Compared as-is, a decision recorded under the second spelling did
+    not count for the agenda item configured under the first, and the agenda
+    could not be advanced although the decision was on the board.
+    """
+    return "".join((text or "").split())
+
+
+def same_matter(a: str, b: str, threshold: float = 0.6) -> bool:
+    """Whether two descriptions written by the model are about the same thing.
+
+    The model never words a matter the same way twice, so this compares how
+    much of the text the two have in common.
+    """
+    a, b = squash(a), squash(b)
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+
 def create_get_meeting_timer_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
@@ -307,6 +373,7 @@ def create_get_meeting_timer_tool(session_manager: SessionManager):
     }
 
     @function_tool(raw_schema=raw_schema)
+    @logged_tool
     async def get_meeting_timer(raw_arguments: dict) -> str:
         elapsed_secs = session_manager.get_elapsed_seconds()
         elapsed_mins = elapsed_secs // 60
@@ -382,6 +449,7 @@ def create_advance_agenda_tool(session_manager: SessionManager):
     }
 
     @function_tool(raw_schema=raw_schema)
+    @logged_tool
     async def advance_agenda(raw_arguments: dict) -> str:
         try:
             item_index = int(raw_arguments.get("item_index", 1))
@@ -410,26 +478,42 @@ def create_advance_agenda_tool(session_manager: SessionManager):
                 )
                 return (
                     f"【暂不推进】还有 {len(pending)} 位【必须发言】人员没有被点名征询：{names}。"
-                    f"请先逐一调用 request_speaker 点名并听取表态——沉默不等于同意——再推进议题。"
+                    f"请现在调用一次 request_speaker，把这几位一起点到（attendee_names），"
+                    f"听完表态后再调用 advance_agenda。"
                 )
-
-        session_manager.current_agenda_index = target_idx
-        # 换议题即清空本议题的点名记录
-        session_manager.called_attendee_ids = set()
 
         agendas = session_manager.meeting_agendas()
 
-        await session_manager.publish_meeting_data({
-            "type": "advance_agenda",
-            "currentAgendaIndex": target_idx,
-            "summary": summary,
-        })
+        # The model calls this again when somebody speaks before it got to
+        # announce the new item. The second call must not start the item over.
+        if target_idx != leaving_idx:
+            session_manager.current_agenda_index = target_idx
+            # 换议题即清空本议题的点名记录
+            session_manager.called_attendee_ids = set()
+            session_manager.on_agenda_changed()
 
-        title = agendas[target_idx].get("title", f"议题 {target_idx + 1}") if 0 <= target_idx < len(agendas) else f"第 {target_idx + 1} 项"
+            await session_manager.publish_meeting_data({
+                "type": "advance_agenda",
+                "currentAgendaIndex": target_idx,
+                "summary": summary,
+            })
+
+        in_range = 0 <= target_idx < len(agendas)
+        title = agendas[target_idx].get("title", "") if in_range else ""
+        minutes = agendas[target_idx].get("durationMinutes") if in_range else None
         note = ""
         if target_idx != item_index - 1:
             note = f"（请求的第 {item_index} 项超出议程范围，已定位到第 {target_idx + 1} 项）"
-        return f"会议议程已更新至第 {target_idx + 1} 项：【{title}】{note}。前台看板已同步更新。"
+        if target_idx == leaving_idx:
+            return (
+                f"议程已经在第 {target_idx + 1} 项「{title}」，不需要再推进。"
+                "已经宣布过就不要再宣布，继续听大家讨论。"
+            )
+        planned = f"，计划 {minutes} 分钟" if minutes else ""
+        return (
+            f"议程已更新至第 {target_idx + 1} 项{note}，看板已同步。"
+            f"{SAY_EXACTLY}\n“现在进入第 {target_idx + 1} 项：「{title}」{planned}。”"
+        )
 
     return advance_agenda
 
@@ -484,12 +568,12 @@ def create_record_decision_tool(session_manager: SessionManager):
     }
 
     @function_tool(raw_schema=raw_schema)
+    @logged_tool
     async def record_decision(raw_arguments: dict) -> str:
         decision_text = raw_arguments.get("decision", "")
-        agendas = session_manager.meeting_agendas()
-        idx = session_manager.current_agenda_index
-        default_agenda_title = agendas[idx].get("title", "") if 0 <= idx < len(agendas) else "通用决议"
-        agenda_title = raw_arguments.get("agenda_title") or default_agenda_title
+        agenda_title = session_manager.canonical_agenda_title(
+            raw_arguments.get("agenda_title"), fallback="通用决议"
+        )
 
         # 补齐四要素时模型会带着同一条结论再调用一次：按「议题+结论文本」做 upsert，
         # 复用原 id 覆盖，避免看板上出现两条内容相同、完整度不同的决议。
@@ -498,7 +582,7 @@ def create_record_decision_tool(session_manager: SessionManager):
                 d
                 for d in session_manager.decisions
                 if d.get("agendaTitle") == agenda_title
-                and d.get("decision", "").strip() == decision_text.strip()
+                and squash(d.get("decision")) == squash(decision_text)
             ),
             None,
         )
@@ -540,7 +624,20 @@ def create_record_decision_tool(session_manager: SessionManager):
                 f"请立即当场追问补齐，例如「这条由谁负责？什么时候完成？用什么方式验证？拿什么作为关闭证据？」，"
                 f"补齐后重新调用 record_decision 覆盖记录；若确实问不齐，改用 record_open_item 记为未决事项。"
             )
-        return base + " 四要素齐全，请口头向全场复述确认一次。"
+        owner, due = decision_item["owner"], decision_item["dueDate"]
+        readback = f"已记录决议：{decision_text.rstrip('。')}。由{owner}负责，{due}完成。"
+        pending = session_manager.pending_required_speakers()
+        if pending:
+            names = "、".join(a.get("name") or a.get("role") or "" for a in pending)
+            # Said together with the roll call: asked to speak two tool
+            # answers in a row, the model drops the first one.
+            session_manager.unspoken_readback = readback
+            return (
+                base
+                + f" 四要素齐全。现在先不要开口，接着调用 request_speaker 点名还没表态的 {names}，"
+                "要说的话由它给出。"
+            )
+        return base + f" 四要素齐全。{SAY_EXACTLY}\n“{readback}”"
 
     return record_decision
 
@@ -583,21 +680,40 @@ def create_record_open_item_tool(session_manager: SessionManager):
     }
 
     @function_tool(raw_schema=raw_schema)
+    @logged_tool
     async def record_open_item(raw_arguments: dict) -> str:
         issue = raw_arguments.get("issue", "")
-        agenda_title = raw_arguments.get("agenda_title") or session_manager.current_agenda_title()
+        agenda_title = session_manager.canonical_agenda_title(
+            raw_arguments.get("agenda_title")
+        )
         escalate_to = raw_arguments.get("escalate_to") or session_manager.escalation_path()
 
+        reason = raw_arguments.get("reason") or ""
+        # The model records an item when it first hears "今天定不下来" and again
+        # when somebody proposes to record it, in other words each time: the
+        # second call updates the first instead of adding a twin.
+        existing = next(
+            (
+                o
+                for o in session_manager.open_items
+                if o.get("agendaTitle") == agenda_title
+                and same_matter(issue + reason, o.get("issue", "") + o.get("reason", ""))
+            ),
+            None,
+        )
         open_item = {
-            "id": f"open-{uuid.uuid4().hex[:8]}",
+            "id": existing["id"] if existing else f"open-{uuid.uuid4().hex[:8]}",
             "agendaTitle": agenda_title,
             "issue": issue,
-            "reason": raw_arguments.get("reason") or "",
-            "owner": raw_arguments.get("owner") or "",
+            "reason": reason,
+            "owner": raw_arguments.get("owner") or (existing or {}).get("owner", ""),
             "escalateTo": escalate_to,
-            "timestamp": int(time.time() * 1000),
+            "timestamp": existing["timestamp"] if existing else int(time.time() * 1000),
         }
-        session_manager.open_items.append(open_item)
+        if existing:
+            session_manager.open_items[session_manager.open_items.index(existing)] = open_item
+        else:
+            session_manager.open_items.append(open_item)
 
         await session_manager.publish_meeting_data({
             "type": "new_open_item",
@@ -618,60 +734,96 @@ def create_request_speaker_tool(session_manager: SessionManager):
         "type": "function",
         "name": "request_speaker",
         "description": (
-            "点名征询某位参会人的意见，前台看板会高亮该参会人。"
-            "本公司参会人普遍不会主动表态，沉默不等于同意——议题收尾前必须对所有【必须发言】人员逐一点名。"
+            "点名征询参会人的意见，前台看板会高亮被点到的人。"
+            "本公司参会人普遍不会主动表态，沉默不等于同意——议题收尾前必须点到所有【必须发言】人员。"
+            "一次调用把还没表态的人都点到，不要一人调用一次。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "attendee_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要点名的参会人姓名或岗位，须来自会议参会人名单；可以一次点多位",
+                },
                 "attendee_name": {
                     "type": "string",
-                    "description": "要点名的参会人姓名或岗位，须来自会议参会人名单",
+                    "description": "只点一位时可用这个字段",
                 },
                 "reason": {
                     "type": "string",
-                    "description": "点名征询的具体问题或角度（如'请从质量口径说明是否接受该让步'）",
+                    "description": "点名征询的角度，只显示在看板上（如'从质量口径看是否接受该让步'）",
                 },
             },
-            "required": ["attendee_name"],
             "additionalProperties": False,
         },
     }
 
     @function_tool(raw_schema=raw_schema)
+    @logged_tool
     async def request_speaker(raw_arguments: dict) -> str:
-        name = raw_arguments.get("attendee_name", "")
+        names = raw_arguments.get("attendee_names") or []
+        if isinstance(names, str):
+            names = [names]
+        if raw_arguments.get("attendee_name"):
+            names = [*names, raw_arguments["attendee_name"]]
         reason = raw_arguments.get("reason") or ""
-        attendee = session_manager.find_attendee(name)
 
-        if attendee is None:
+        found: list[dict] = []
+        unknown: list[str] = []
+        for name in names:
+            attendee = session_manager.find_attendee(str(name))
+            if attendee is None:
+                unknown.append(str(name))
+            elif attendee not in found:
+                found.append(attendee)
+
+        if not found:
             roster = session_manager.meeting_attendees()
             known = "、".join(
                 (a.get("name") or a.get("role") or "") for a in roster if (a.get("name") or a.get("role"))
             )
             return (
-                f"参会人名单中没有找到「{name}」。"
+                f"参会人名单中没有找到「{'、'.join(unknown)}」。"
                 + (f"当前名单为：{known}。请改用名单中的称呼点名。" if known else "本次会议尚未登记参会人名单，可直接口头点名。")
             )
 
-        attendee_id = attendee.get("id", "")
-        session_manager.called_attendee_ids.add(attendee_id)
+        labels = []
+        for attendee in found:
+            label = attendee.get("name") or attendee.get("role") or ""
+            labels.append(label)
+            session_manager.called_attendee_ids.add(attendee.get("id", ""))
+            await session_manager.publish_meeting_data({
+                "type": "roll_call",
+                "attendeeId": attendee.get("id", ""),
+                "attendeeName": label,
+                "reason": reason,
+            })
 
-        await session_manager.publish_meeting_data({
-            "type": "roll_call",
-            "attendeeId": attendee_id,
-            "attendeeName": attendee.get("name") or attendee.get("role") or name,
-            "reason": reason,
-        })
-
-        label = attendee.get("name") or attendee.get("role") or name
-        remaining = len(session_manager.pending_required_speakers())
+        remaining = session_manager.pending_required_speakers()
+        readback, session_manager.unspoken_readback = session_manager.unspoken_readback, ""
+        question = readback + (
+            f"请{labels[0]}表个态：同意，还是有不同意见？"
+            if len(labels) == 1
+            else f"请{'、'.join(labels)}依次表个态：同意，还是有不同意见？"
+        )
         return (
-            f"已在看板高亮点名 {label}。请立即开口征询："
-            f"「请{label}就本议题明确表个态"
-            + (f"，{reason}" if reason else "")
-            + "：你的意见是什么？有没有不同看法？」"
-            + (f" 本议题还剩 {remaining} 位必须发言人员未点名。" if remaining else " 本议题必须发言人员已全部点名。")
+            f"已在看板高亮点名 {'、'.join(labels)}。"
+            + (
+                f"还有 {'、'.join(a.get('name') or a.get('role') or '' for a in remaining)} 没点到，"
+                "听完这几位的表态后接着点。"
+                if remaining
+                else (
+                    "本议题必须发言的人已全部点到。"
+                    + (
+                        f"这 {len(labels)} 位都表态之后才能调用 advance_agenda，"
+                        "只听到其中一位时继续等。"
+                        if len(labels) > 1
+                        else "听完表态即可推进议题。"
+                    )
+                )
+            )
+            + f"{SAY_EXACTLY}\n“{question}”"
         )
 
     return request_speaker
@@ -681,7 +833,7 @@ def create_warn_topic_drift_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
         "name": "warn_topic_drift",
-        "description": "当参会人员讨论明显偏离当前议程核心目标时，触发前台看板醒目的跑题黄牌警示与提示音，并立即开麦强势切入叫停拉回。",
+        "description": "当参会人员的讨论明显偏离当前议题时，先调用本工具申请打断。工具会返回是否允许你开口：允许时照返回的原话说，不允许时保持静默。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -696,20 +848,10 @@ def create_warn_topic_drift_tool(session_manager: SessionManager):
     }
 
     @function_tool(raw_schema=raw_schema)
+    @logged_tool
     async def warn_topic_drift(raw_arguments: dict) -> str:
         reason = raw_arguments.get("reason", "讨论内容偏离当前议程核心目标")
-
-        await session_manager.publish_meeting_data({
-            "type": "drift_warning",
-            "active": True,
-            "reason": reason,
-        })
-
-        return (
-            f"已在前台看板亮起跑题黄牌警示并鸣响提示音：{reason}。"
-            f"请立即用清脆响亮、毋庸置疑的声音强势切入叫停：“打扰一下，请大家先暂停一下！”，"
-            f"指出偏离并强行要求大家立即回到当前议程讨论，严禁等待对方继续展开！"
-        )
+        return await session_manager.request_model_intervention(reason)
 
     return warn_topic_drift
 
@@ -749,13 +891,484 @@ class SessionManager:
         self.decisions: list[dict] = []
         self.open_items: list[dict] = []
         self.called_attendee_ids: set[str] = set()
+        #: a decision that was recorded but not confirmed aloud yet
+        self.unspoken_readback: str = ""
         self.overtime_alerted: set[int] = set()
         self.monitor_task: asyncio.Task | None = None
+
+        # Off-topic handling: one gate shared by the Jev detector, the Live
+        # model (warn_topic_drift) and the 立即纠偏 button.
+        self.gate = InterventionGate(
+            settings=InterventionSettings.from_dict(
+                (config.meeting_config or {}).get("intervention")
+            )
+        )
+        self.detector: DriftDetector | None = None
+        self.fast_transcript: FastTranscript | None = None
+        self.clips: SpokenClips | None = None
+        self.voice: DirectVoice | None = None
+        #: when the fast transcript heard something the Live model has not
+        #: reported yet (monotonic), to notice a Live session that went deaf
+        self.unheard_since: float | None = None
+        self.last_suggestion: dict | None = None
+        self.last_transcript_wall: float = 0.0
+        self.agent_state_since: float = time.monotonic()
+        self.last_watchdog_restart: float = 0.0
+        self._background_tasks: set[asyncio.Task] = set()
 
     def get_elapsed_seconds(self) -> int:
         if self.meeting_start_time is None:
             return 0
         return int(time.time() - self.meeting_start_time)
+
+    def _spawn(self, coro) -> asyncio.Task:
+        """Run a coroutine from a sync event callback, keeping a reference."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    # ---- off-topic handling ----------------------------------------------
+
+    def on_agenda_changed(self) -> None:
+        """A new agenda item starts from a clean slate."""
+        self.gate.hold()
+        if self.detector is not None:
+            self.detector.reset()
+        self.prepare_interruption_clips()
+
+    def prepare_interruption_clips(self) -> None:
+        """Has every interruption for the current agenda item ready to play."""
+        if not self.current_config.meeting_config:
+            return
+        if os.environ.get("SPOKEN_CLIPS", "1") == "0":
+            return
+        key = resolve_gemini_key(self.current_config.gemini_api_key)
+        if not key:
+            return
+        if self.clips is None:
+            self.clips = SpokenClips(key, self.current_config.voice)
+        if self.voice is None and self.ctx is not None:
+            self.voice = DirectVoice(self.ctx.room)
+        scripts = [self.interruption_script(code) for code in ("", *INTERRUPTION_REASONS)]
+        self.clips.prepare(scripts)
+        self._spawn(self._warm_up_voice(scripts[0]))
+
+    async def _warm_up_voice(self, script: str) -> None:
+        for _ in range(200):
+            clip = self.clips.get(script) if self.clips is not None else None
+            if clip is not None and self.voice is not None:
+                await self.voice.warm_up(clip)
+                return
+            await asyncio.sleep(0.1)
+
+    def speak_interruption(self, intervention: Intervention):
+        """Interrupts now. Returns a handle the undo can stop, or None when
+        the Live model was asked to say it (and answers at the next pause)."""
+        script = self.interruption_script(intervention.reason_code)
+        clip = self.clips.get(script) if self.clips is not None else None
+        if clip is not None and self.voice is not None:
+
+            def started() -> None:
+                intervention.speech_started_at = time.time()
+                self._spawn(self.publish_intervention_metrics(intervention))
+                self._spawn(self._tell_model_what_was_said(script))
+
+            speech = self.voice.play(clip, script, on_started=started)
+            if speech is not None:
+                return speech
+        return self.cue_model(self.intervention_prompt(intervention.reason_code))
+
+    async def _tell_model_what_was_said(self, script: str) -> None:
+        """The Live model did not say the sentence and would not know about it."""
+        rt = self._realtime_session()
+        if rt is None:
+            return
+        try:
+            chat_ctx = rt.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="user",
+                content=(
+                    f"【系统提示】主持人刚才已经打断了跑题的发言，说的是：“{script}”"
+                    "不要重复这句话，不要再调用 warn_topic_drift，继续监听。"
+                ),
+            )
+            await rt.update_chat_ctx(chat_ctx)
+        except Exception as e:
+            logger.warning(f"could not tell the model about the interruption: {e!r}")
+
+    def agent_is_speaking(self) -> bool:
+        """Speaking, or about to: "thinking" is the model preparing its turn."""
+        if self.voice is not None and self.voice.playing:
+            return True
+        session = self.current_session
+        return session is not None and session.agent_state in ("speaking", "thinking")
+
+    def drift_context(self) -> dict | None:
+        """What Jev needs to know about the meeting. Kept small on purpose:
+        its accuracy drops as the state fills up with unrelated content."""
+        cfg = self.current_config.meeting_config
+        if not cfg:
+            return None
+        agendas = self.meeting_agendas()
+        idx = self.current_agenda_index
+        if not 0 <= idx < len(agendas):
+            return None
+        current = agendas[idx]
+        return {
+            "meeting_topic": cfg.get("topic", ""),
+            "current_agenda": {
+                "title": current.get("title", ""),
+                "goal": current.get("goal", ""),
+            },
+            "other_agenda_titles": [
+                a.get("title", "") for i, a in enumerate(agendas) if i != idx
+            ],
+        }
+
+    def interruption_script(self, reason_code: str = "") -> str:
+        """The exact words of an interruption, for the current agenda item."""
+        agendas = self.meeting_agendas()
+        idx = self.current_agenda_index
+        title = agendas[idx].get("title", "") if 0 <= idx < len(agendas) else ""
+        style = (self.current_config.meeting_config or {}).get("style", "strict")
+        return spoken_interruption(title, reason_code, style)
+
+    def intervention_prompt(self, reason_code: str = "") -> str:
+        return (
+            "【打断指令】讨论已经跑题，请你现在开口打断。"
+            f"{SAY_EXACTLY}不要调用 warn_topic_drift。\n"
+            f"“{self.interruption_script(reason_code)}”"
+        )
+
+    def move_on_prompt(self) -> str | None:
+        """What to tell the model when people talk about another agenda item
+        although the current one already has its outcome. None if it has not."""
+        if not (self.decisions_for_current_agenda() or self.open_items_for_current_agenda()):
+            return None
+        title = self.current_agenda_title()
+        pending = self.pending_required_speakers()
+        if pending:
+            names = "、".join(a.get("name") or a.get("role") or "" for a in pending)
+            return (
+                f"【推进指令】议题「{title}」已有结论，大家已经谈到别的议题，"
+                f"但 {names} 还没有表态。请现在调用 request_speaker 点到这几位，"
+                "照工具返回的原话说。不要调用 warn_topic_drift。"
+            )
+        return (
+            f"【推进指令】议题「{title}」已有结论，大家已经谈到别的议题。"
+            "请判断大家在谈议程里的哪一项，调用 advance_agenda 推进到那一项，"
+            "照工具返回的原话说。不要调用 warn_topic_drift。"
+        )
+
+    async def publish_drift_warning(self, intervention: Intervention) -> None:
+        intervention.published_at = time.time()
+        latency_ms = None
+        if intervention.transcript_at:
+            latency_ms = int((intervention.published_at - intervention.transcript_at) * 1000)
+        await self.publish_meeting_data({
+            "type": "drift_warning",
+            "active": True,
+            "source": intervention.source,
+            "interventionId": intervention.id,
+            "reason": intervention.reason,
+            "reasonCode": intervention.reason_code,
+            "confidence": intervention.confidence,
+            "latencyMs": latency_ms,
+        })
+
+    async def publish_drift_suggestion(
+        self, *, source: str, reason: str, reason_code: str, confidence: float | None
+    ) -> bool:
+        suggestion_id = self.gate.try_suggest(SUGGESTION_TTL_SECONDS)
+        if suggestion_id is None:
+            return False
+        self.last_suggestion = {
+            "suggestionId": suggestion_id,
+            "source": source,
+            "reason": reason,
+            "reasonCode": reason_code,
+            "confidence": confidence,
+        }
+        await self.publish_meeting_data({
+            "type": "drift_suggestion",
+            **self.last_suggestion,
+            "expiresAt": int((time.time() + SUGGESTION_TTL_SECONDS) * 1000),
+        })
+        return True
+
+    async def request_model_intervention(self, reason: str) -> str:
+        """The Live model thinks the discussion drifted and asks to cut in.
+
+        The answer tells it whether to speak. Mode and cooldown are decided
+        here, not in the prompt, so they can change while the meeting runs.
+        """
+        keep_quiet = "请保持静默，不要开口，不要向参会人提及本次检测，继续监听。"
+
+        if self.gate.settings.mode == "semi_auto":
+            await self.publish_drift_suggestion(
+                source="model", reason=reason, reason_code="", confidence=None
+            )
+            return f"当前为半自动介入模式：已在看板上提示人类主持人，由其决定是否打断。{keep_quiet}"
+
+        intervention = self.gate.try_acquire("model")
+        if intervention is None:
+            logger.info("warn_topic_drift refused: cooling down")
+            return f"刚刚已经提醒过一次，现在处于冷却期。{keep_quiet}"
+
+        intervention.reason = reason
+        intervention.transcript_at = self.last_transcript_wall or None
+        if self.current_session is not None:
+            # the model's own turn is the speech that delivers this interruption
+            intervention.handle = self.current_session.current_speech
+        if self.detector is not None:
+            self.detector.reset()
+        await self.publish_drift_warning(intervention)
+
+        return (
+            "允许打断，看板已显示跑题提示。请你现在开口。"
+            f"{SAY_EXACTLY}\n“{self.interruption_script()}”"
+        )
+
+    async def handle_drift(self, result: DriftResult) -> None:
+        """Jev judged the recent discussion off topic."""
+        judgment = result.judgment
+        logger.info(
+            f"drift detected: p={judgment.probability:.2f} level={judgment.level:.2f} "
+            f"reason={judgment.reason_code} jev={judgment.elapsed_ms}ms hits={result.hits}"
+        )
+
+        if self.gate.settings.mode == "semi_auto":
+            await self.publish_drift_suggestion(
+                source="jev",
+                reason=result.reason,
+                reason_code=judgment.reason_code,
+                confidence=judgment.probability,
+            )
+            return
+
+        move_on = (
+            self.move_on_prompt() if judgment.reason_code == "other_agenda_item" else None
+        )
+
+        intervention = self.gate.try_acquire("jev", agent_speaking=self.agent_is_speaking())
+        if intervention is None:
+            logger.info("jev interruption refused: cooling down or moderator speaking")
+            return
+
+        if move_on:
+            # Not a digression: the item is settled and the meeting moved on by
+            # itself. Pulling people back to a finished item would be wrong.
+            logger.info("the discussion moved to another agenda item; prompting to move on")
+            self.gate.active = None
+            if self.detector is not None:
+                self.detector.reset()
+            self.cue_model(move_on)
+            return
+
+        intervention.confidence = judgment.probability
+        intervention.reason = result.reason
+        intervention.reason_code = judgment.reason_code
+        intervention.excerpt = result.excerpt
+        intervention.transcript_at = result.transcript_at
+        intervention.jev_ms = judgment.elapsed_ms
+
+        await self.publish_drift_warning(intervention)
+        intervention.handle = self.speak_interruption(intervention)
+
+    async def handle_judgment(self, judgment: DriftJudgment) -> None:
+        """Every judgment feeds the live confidence meter on the kanban."""
+        await self.publish_meeting_data({
+            "type": "drift_score",
+            "confidence": judgment.probability,
+            "level": judgment.level,
+            "reasonCode": judgment.reason_code,
+            "reason": REASON_LABELS.get(judgment.reason_code, ""),
+            "jevMs": judgment.elapsed_ms,
+            "threshold": self.gate.settings.threshold,
+        })
+
+    def start_detector(self) -> None:
+        if self.detector is not None or not self.current_config.meeting_config:
+            return
+        judge = JevJudge.from_env()
+        if judge is None:
+            logger.warning(
+                "JEV_API_KEY is not set: off-topic detection relies on the Live model alone"
+            )
+            return
+        self.detector = DriftDetector(
+            judge,
+            get_context=self.drift_context,
+            get_settings=lambda: self.gate.settings,
+            on_drift=self.handle_drift,
+            on_judgment=self.handle_judgment,
+        )
+        # Open the connection now so the first real judgment does not pay for
+        # the TLS handshake (about 1.5 s through a proxy).
+        self._spawn(self._warm_up_detector(judge))
+        logger.info("Jev drift detector started")
+        self.start_fast_transcript()
+        self.prepare_interruption_clips()
+
+    def meeting_vocabulary(self) -> list[str]:
+        """Names and titles of this meeting, to bias the speech recognition."""
+        words = [a.get("name", "") for a in self.meeting_attendees()]
+        words += [a.get("title", "") for a in self.meeting_agendas()]
+        return [w.strip() for w in words if w and w.strip()]
+
+    def start_fast_transcript(self) -> None:
+        if self.fast_transcript is not None or os.environ.get("FAST_TRANSCRIPT", "1") == "0":
+            return
+        if self.ctx is None or self.participant is None:
+            return
+        key = resolve_gemini_key(self.current_config.gemini_api_key)
+        if not key:
+            return
+        self.fast_transcript = FastTranscript(
+            self.ctx.room,
+            self.participant.identity,
+            self.on_fast_transcript,
+            api_key=key,
+            model=os.environ.get("GEMINI_TRANSCRIBE_MODEL", "").strip() or FAST_TRANSCRIPT_MODEL,
+            language_codes=MEETING_LANGUAGE_CODES,
+            vocabulary=self.meeting_vocabulary(),
+        )
+        self.fast_transcript.start()
+
+    def on_fast_transcript(self, item_id: str, text: str, final: bool) -> None:
+        self.last_transcript_wall = time.time()
+        # somebody finished a sentence: the Live model reports it within a
+        # few seconds, unless it has gone deaf
+        if final and self.unheard_since is None and len(text) >= 10:
+            self.unheard_since = time.monotonic()
+        if self.detector is not None:
+            self.detector.on_transcript(item_id, text)
+
+    async def _warm_up_detector(self, judge: JevJudge) -> None:
+        context = self.drift_context()
+        if not context:
+            return
+        try:
+            judgment = await judge.judge({**context, "recent_transcript": "会议现在开始。"})
+            logger.info(f"Jev connection warmed up in {judgment.elapsed_ms}ms")
+        except Exception as e:
+            logger.warning(f"Jev warm-up failed: {e!r}")
+
+    async def stop_detector(self) -> None:
+        fast, self.fast_transcript = self.fast_transcript, None
+        if fast is not None:
+            await fast.aclose()
+        clips, self.clips = self.clips, None
+        if clips is not None:
+            await clips.aclose()
+        voice, self.voice = self.voice, None
+        if voice is not None:
+            await voice.aclose()
+        detector, self.detector = self.detector, None
+        if detector is not None:
+            await detector.aclose()
+
+    def attach_session_events(self, session: AgentSession) -> None:
+        @session.on("user_input_transcribed")
+        def _on_user_input_transcribed(ev) -> None:
+            if not ev.transcript:
+                return
+            self.unheard_since = None
+            fast = self.fast_transcript
+            if fast is not None and fast.healthy:
+                # the detection already heard this, seconds ago
+                return
+            self.last_transcript_wall = time.time()
+            if self.detector is not None:
+                self.detector.on_transcript(ev.item_id, ev.transcript)
+
+        @session.on("agent_state_changed")
+        def _on_agent_state_changed(ev) -> None:
+            self.agent_state_since = time.monotonic()
+            if ev.new_state != "speaking":
+                return
+            intervention = self.gate.active
+            if (
+                intervention is None
+                or intervention.undone
+                or intervention.speech_started_at is not None
+                or time.time() - (intervention.published_at or 0) > 15
+            ):
+                return
+            intervention.speech_started_at = time.time()
+            self._spawn(self.publish_intervention_metrics(intervention))
+
+        @session.on("speech_created")
+        def _on_speech_created(ev) -> None:
+            intervention = self.gate.active
+            if intervention is not None and intervention.pending_cancel:
+                intervention.pending_cancel = False
+                ev.speech_handle.interrupt(force=True)
+
+    async def publish_intervention_metrics(self, intervention: Intervention) -> None:
+        def since_transcript(moment: float | None) -> int | None:
+            if not moment or not intervention.transcript_at:
+                return None
+            return int((moment - intervention.transcript_at) * 1000)
+
+        metrics = {
+            "type": "intervention_metrics",
+            "interventionId": intervention.id,
+            "source": intervention.source,
+            "jevMs": intervention.jev_ms,
+            "detectToPublishMs": since_transcript(intervention.published_at),
+            "speechStartMs": since_transcript(intervention.speech_started_at),
+        }
+        logger.info(f"intervention latency: {metrics}")
+        await self.publish_meeting_data(metrics)
+
+    async def publish_intervention_settings(self) -> None:
+        await self.publish_meeting_data({
+            "type": "intervention_settings",
+            "intervention": self.gate.settings.to_dict(),
+        })
+
+    async def silence_intervention(self, intervention: Intervention) -> None:
+        """Stop the moderator's interruption and let the speaker carry on.
+
+        The Live session runs with NO_INTERRUPTION, so the server finishes
+        generating its turn whatever we do; what can be stopped is the playback.
+        ``force`` is needed for the same reason. The browser mutes the agent
+        track at the same moment, in case the speech has not reached us yet.
+        """
+        session = self.current_session
+        handles = [intervention.handle]
+        if session is not None:
+            # When the model interrupted on its own, the speech that is playing
+            # is its reply to the tool result, not the turn that made the call.
+            handles.append(session.current_speech)
+
+        stopped = False
+        for handle in handles:
+            if handle is not None and not handle.done():
+                handle.interrupt(force=True)
+                stopped = True
+        if not stopped:
+            # the speech does not exist yet: cancel it as soon as it is created
+            intervention.pending_cancel = True
+
+        rt = self._realtime_session()
+        if rt is None:
+            return
+        try:
+            chat_ctx = rt.chat_ctx.copy()
+            chat_ctx.add_message(
+                role="user",
+                content=(
+                    "【系统提示】人类主持人撤销了你刚才的打断：那段讨论并没有跑题，是你判断有误。"
+                    "请保持静默，让发言人继续，不要道歉也不要解释；之后对同类内容放宽判断。"
+                ),
+            )
+            await rt.update_chat_ctx(chat_ctx)
+        except Exception as e:
+            # best effort: the playback is already stopped
+            logger.warning(f"could not tell the model about the undo: {e!r}")
 
     # ---- meeting helpers -------------------------------------------------
 
@@ -779,6 +1392,25 @@ class SessionManager:
         if 0 <= idx < len(agendas):
             return agendas[idx].get("title", f"议题 {idx + 1}")
         return "当前议题"
+
+    def canonical_agenda_title(self, title: str | None, fallback: str = "") -> str:
+        """The configured spelling of an agenda title the model passed in.
+
+        Nothing passed in means the current agenda item. A title that matches
+        no configured item is kept as the model wrote it.
+        """
+        agendas = self.meeting_agendas()
+        if not (title or "").strip():
+            idx = self.current_agenda_index
+            if 0 <= idx < len(agendas):
+                return agendas[idx].get("title", "") or fallback
+            return fallback or "当前议题"
+
+        wanted = squash(title)
+        for agenda in agendas:
+            if squash(agenda.get("title")) == wanted:
+                return agenda.get("title", "")
+        return title.strip()
 
     def clamp_agenda_index(self, one_based: int) -> int:
         """1-based -> 0-based, bounded to the agenda list.
@@ -832,12 +1464,12 @@ class SessionManager:
         return out
 
     def decisions_for_current_agenda(self) -> list[dict]:
-        title = self.current_agenda_title()
-        return [d for d in self.decisions if d.get("agendaTitle") == title]
+        title = squash(self.current_agenda_title())
+        return [d for d in self.decisions if squash(d.get("agendaTitle")) == title]
 
     def open_items_for_current_agenda(self) -> list[dict]:
-        title = self.current_agenda_title()
-        return [o for o in self.open_items if o.get("agendaTitle") == title]
+        title = squash(self.current_agenda_title())
+        return [o for o in self.open_items if squash(o.get("agendaTitle")) == title]
 
     async def publish_meeting_data(self, payload: dict):
         if not self.ctx or not self.ctx.room or not self.ctx.room.local_participant:
@@ -877,6 +1509,8 @@ class SessionManager:
                     }
                 })
 
+                await self._restart_if_stuck()
+
                 # Check agenda overtime alert
                 if 0 <= idx < len(agendas) and idx not in self.overtime_alerted:
                     accumulated_target_secs = sum(a.get("durationMinutes", 0) for a in agendas[:idx+1]) * 60
@@ -885,15 +1519,68 @@ class SessionManager:
                         cur_title = agendas[idx].get("title", f"议题 {idx + 1}")
                         logger.info(f"Agenda {idx + 1} ({cur_title}) has exceeded planned time")
 
+                        # Running over time is not going off topic: it has its
+                        # own message so the UI does not show a drift warning.
                         await self.publish_meeting_data({
-                            "type": "drift_warning",
-                            "active": True,
-                            "reason": f"【时间提醒】议题「{cur_title}」已达到计划用时，建议尽快确认决议并推进至下一议题。"
+                            "type": "overtime_warning",
+                            "agendaIndex": idx,
+                            "title": cur_title,
+                            "reason": f"议题「{cur_title}」已达到计划用时，建议尽快确认决议并推进至下一议题。"
                         })
         except asyncio.CancelledError:
             logger.info("Meeting time monitor cancelled")
         except Exception as e:
             logger.error(f"Error in meeting time monitor: {e}")
+
+    async def _restart_if_stuck(self) -> None:
+        """Replace a Live session that stopped responding.
+
+        Seen once in testing: after a chain of tool calls the session stayed in
+        "thinking" and delivered neither speech nor transcripts any more, which
+        also blinds the off-topic detection. A moderator that went deaf in the
+        middle of a meeting is worse than a short gap, so after
+        STUCK_THINKING_SECONDS the session is rebuilt with the same settings.
+        The meeting state (agenda, decisions, open items) lives in this object
+        and carries over.
+        """
+        session = self.current_session
+        if session is None or self.ctx is None or self.participant is None:
+            return
+        now = time.monotonic()
+        stuck = (
+            session.agent_state == "thinking"
+            and now - self.agent_state_since >= STUCK_THINKING_SECONDS
+        )
+        # The other way of failing: the session looks fine ("listening") but
+        # reports nothing of what is being said, while the fast transcript
+        # hears people talk.
+        # Somebody who talks without a pause is no sign of it: the Live model
+        # reports a remark when it is over.
+        deaf = (
+            self.unheard_since is not None
+            and now - self.unheard_since >= DEAF_SECONDS
+            and session.agent_state != "speaking"
+            and session.user_state != "speaking"
+        )
+        if not (stuck or deaf):
+            return
+        if now - self.last_watchdog_restart < 2 * STUCK_THINKING_SECONDS:
+            return
+
+        self.last_watchdog_restart = now
+        self.agent_state_since = now
+        self.unheard_since = None
+        logger.warning(
+            "the Live session "
+            + (
+                f"has been 'thinking' for over {STUCK_THINKING_SECONDS:.0f}s"
+                if stuck
+                else f"has not reported any speech for {DEAF_SECONDS:.0f}s while people talk"
+            )
+            + "; restarting it"
+        )
+        config = self.current_config
+        await self.replace_session(self.ctx, self.participant, config, config)
 
     # ---- making the moderator speak on demand -----------------------------
 
@@ -906,25 +1593,24 @@ class SessionManager:
             # the agent is not running (yet, or any more)
             return None
 
-    def cue_model(self, text: str, *, allow_interruptions: bool = True):
+    def cue_model(self, text: str):
         """Make the model speak now (opening announcement, forced intervention…).
 
-        Which mechanism is used depends on the active Live model:
+        Two mechanisms exist, and ``model_caps`` says which one a model gets:
 
-        * Models with a mutable chat context (gemini-2.5 native audio) go through
-          ``AgentSession.generate_reply`` as before.
-        * ``gemini-3.1-flash-live-preview`` only accepts ``client_content`` as the
-          initial history, so livekit-plugins-google 1.8 rejects ``generate_reply``
-          up front ("generate_reply is not compatible with ..." in the logs). That
-          is why the greeting and 立即纠偏 never produced any speech on 3.1. Per the
-          Live API docs, mid-session text must be sent with
-          ``send_realtime_input(text=...)``; the plugin has no public entry point
-          for that, so the cue is queued on its client-event channel as realtime
-          text input. The model answers it like a spoken turn and the reply flows
-          through the usual ``generation_created`` path, so it is scheduled and
-          played exactly like any other model turn.
+        * realtime text input: the cue is sent like something a participant
+          typed, and the model answers it like a spoken turn. The reply comes
+          through the normal generation path, so it is played (and can be
+          stopped) like any other turn of the moderator. The plugin has no
+          public entry point for this, hence the guarded access to its
+          client-event channel.
+        * ``AgentSession.generate_reply``: waits in the framework's speech queue
+          and returns a SpeechHandle.
 
-        Returns the SpeechHandle when ``generate_reply`` was used, else None.
+        Whichever is used first, the other one is tried once if the moderator is
+        not audible after CUE_FALLBACK_SECONDS.
+
+        Returns the SpeechHandle when there is one, else None.
         Never raises; failures are logged.
         """
         session = self.current_session
@@ -932,39 +1618,82 @@ class SessionManager:
             logger.warning("cue_model called without an active session")
             return None
 
-        rt = self._realtime_session()
-        if rt is not None and not rt.capabilities.mutable_chat_context:
-            send = getattr(rt, "_send_client_event", None)
-            if send is not None:
-                send(types.LiveClientRealtimeInput(text=text))
-                logger.info(
-                    f"cue queued as realtime text input for '{rt.realtime_model.model}'"
-                )
-                return None
-            logger.warning(
-                "realtime session exposes no _send_client_event; "
-                "falling back to generate_reply"
-            )
-
-        try:
-            return session.generate_reply(
-                instructions=text,
-                allow_interruptions=allow_interruptions,
-            )
-        except RuntimeError as e:
-            logger.error(f"failed to cue the model: {e}")
+        _, caps, _ = resolve_model(self.current_config.model)
+        if caps.cue_strategy == "realtime_text" and self._cue_as_realtime_text(text):
+            self._spawn(self._watch_cue(session, None, text))
             return None
+
+        handle = self._cue_with_generate_reply(session, text)
+        if handle is None:
+            self._cue_as_realtime_text(text)
+        else:
+            self._spawn(self._watch_cue(session, handle, text))
+        return handle
+
+    def _cue_with_generate_reply(self, session: AgentSession, text: str):
+        try:
+            return session.generate_reply(instructions=text)
+        except RuntimeError as e:
+            logger.error(f"generate_reply failed: {e}")
+            return None
+
+    async def _watch_cue(self, session: AgentSession, handle, text: str) -> None:
+        """Fall back to the other mechanism if the cue stays unanswered.
+
+        The model answers at the next pause of whoever is speaking, so the
+        clock only runs while the room is quiet: a cue is not "unanswered"
+        because somebody kept talking, and sending it twice makes the
+        moderator say it twice.
+        """
+        waited = 0.0
+        started = time.monotonic()
+        while waited < CUE_FALLBACK_SECONDS and time.monotonic() - started < 30:
+            if session is not self.current_session:
+                return
+            if session.agent_state == "speaking":
+                return
+            if handle is not None and handle.done():
+                if handle.interrupted or handle.exception() is None:
+                    return
+                break
+            await asyncio.sleep(0.1)
+            waited = 0.0 if session.user_state == "speaking" else waited + 0.1
+
+        intervention = self.gate.active
+        if intervention is not None and intervention.undone:
+            return  # 撤销打断 arrived in the meantime: stay silent
+
+        if handle is None:
+            logger.warning("realtime text cue was not answered; trying generate_reply")
+            fallback = self._cue_with_generate_reply(session, text)
+            if intervention is not None and fallback is not None:
+                intervention.handle = fallback
+        else:
+            logger.warning("generate_reply produced no speech; resending as realtime text")
+            self._cue_as_realtime_text(text)
+
+    def _cue_as_realtime_text(self, text: str) -> bool:
+        rt = self._realtime_session()
+        send = getattr(rt, "_send_client_event", None) if rt is not None else None
+        if send is None:
+            logger.error("no realtime text channel available; the cue is dropped")
+            return False
+        send(types.LiveClientRealtimeInput(text=text))
+        return True
 
     def create_session(self, config: SessionConfig) -> AgentSession:
         """Create an AgentSession with the given configuration"""
         is_meeting = bool(config.meeting_config)
+        model, caps, _ = resolve_model(config.model)
         llm_kwargs = {
-            "model": config.model,
+            "model": model,
             "voice": config.voice,
-            "temperature": config.temperature,
             "max_output_tokens": int(config.max_response_output_tokens) if config.max_response_output_tokens != "inf" else None,
-            "modalities": config.modalities,
-            "api_key": config.gemini_api_key,
+            # audio-only models reject a TEXT response modality; their text
+            # comes from the output transcription
+            "modalities": ["AUDIO"] if caps.audio_only else config.modalities,
+            # the plugin only looks at GOOGLE_API_KEY, so the key is passed in
+            "api_key": resolve_gemini_key(config.gemini_api_key),
             # Without context-window compression an audio-only Live session is
             # capped at 15 minutes; a 60-minute meeting needs the sliding window.
             # (Connection lifetime is still ~10 min: the plugin reconnects on
@@ -974,22 +1703,31 @@ class SessionManager:
             ),
         }
 
+        if caps.send_temperature:
+            llm_kwargs["temperature"] = config.temperature
+        if caps.tool_behavior is not None:
+            llm_kwargs["tool_behavior"] = types.Behavior[caps.tool_behavior]
+
         session_kwargs = {}
 
         if is_meeting:
-            proactive = model_supports_proactive_audio(config.model)
             logger.info(
-                "Enabling Meeting Moderator audio parameters: "
-                f"proactive={proactive}, silence_duration_ms=250, NO_INTERRUPTION"
+                f"Enabling Meeting Moderator audio parameters for '{model}': "
+                f"tool_behavior={caps.tool_behavior}, silence_duration_ms=250, NO_INTERRUPTION"
             )
-            if proactive:
+            # No supported model takes the flag today (see model_caps): on 3.8
+            # proactive audio is always on, and passing it anyway moves the
+            # plugin onto the v1alpha API.
+            if caps.supports_proactivity_flag:
                 llm_kwargs["proactivity"] = True
-            else:
-                logger.info(
-                    f"'{config.model}' does not support proactive audio; the model "
-                    "answers every detected turn, so silence during on-topic "
-                    "discussion relies on the instructions alone"
-                )
+            # Meetings are held in Mandarin with English terms mixed in. Told
+            # so, the recognizer gets shop-floor vocabulary right that it
+            # otherwise mishears (measured: "模温" came out as "磨损" without
+            # the hint, correctly with it). The transcript feeds the off-topic
+            # detection and the minutes, so its quality matters twice.
+            llm_kwargs["input_audio_transcription"] = types.AudioTranscriptionConfig(
+                language_codes=MEETING_LANGUAGE_CODES
+            )
             llm_kwargs["realtime_input_config"] = types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     silence_duration_ms=250,
@@ -1011,7 +1749,18 @@ class SessionManager:
                 ),
             )
 
-        session_kwargs["llm"] = google.realtime.RealtimeModel(**llm_kwargs)
+        realtime_model = google.realtime.RealtimeModel(**llm_kwargs)
+        if is_meeting:
+            # A moderator has to be able to talk over people. By default the
+            # framework holds every reply back until the room is silent, so an
+            # interruption only came out once the speaker had stopped by
+            # themselves (measured: 9-12 s after the decision to interrupt).
+            # With NO_INTERRUPTION the server already lets the model and the
+            # room speak at the same time; this tells the framework the same.
+            # livekit-plugins-google does not declare the capability itself.
+            realtime_model.capabilities.supports_overlapping_speech = True
+
+        session_kwargs["llm"] = realtime_model
         session = AgentSession(**session_kwargs)
         return session
 
@@ -1021,12 +1770,8 @@ class SessionManager:
         self.participant = participant
 
         tools = []
-        if self.current_config.nano_banana_enabled:
-            logger.info("Nano Banana tool enabled 🍌")
-            tools.append(create_generate_image_tool(self))
-
         if self.current_config.meeting_config:
-            logger.info("Meeting Moderator tools enabled 📋")
+            logger.info("Meeting Moderator tools enabled")
             self.meeting_start_time = time.time()
             self.current_agenda_index = 0
             self.decisions = []
@@ -1043,6 +1788,7 @@ class SessionManager:
             instructions=self.current_config.instructions,
             tools=tools
         )
+        self.attach_session_events(self.current_session)
 
         await self.current_session.start(
             room=ctx.room,
@@ -1051,6 +1797,8 @@ class SessionManager:
 
         # Initial state sync to web clients if meeting is active
         if self.current_config.meeting_config:
+            self.gate.hold(OPENING_GRACE_SECONDS)
+            self.start_detector()
             await self.publish_meeting_data({
                 "type": "state_sync",
                 "state": {
@@ -1059,7 +1807,8 @@ class SessionManager:
                     "decisions": self.decisions,
                     "openItems": self.open_items,
                     "calledAttendeeIds": [],
-                    "driftWarning": False,
+                    "intervention": self.gate.settings.to_dict(),
+                    "detectorActive": self.detector is not None,
                 }
             })
 
@@ -1070,23 +1819,39 @@ class SessionManager:
         # Register RPC method for config updates
         @ctx.room.local_participant.register_rpc_method("pg.updateConfig")
         async def update_config(data: rtc.rpc.RpcInvocationData):
-            logger.info(f"update_config called by {data.caller_identity}: {data.payload}")
+            logger.info(
+                f"update_config called by {data.caller_identity}: "
+                f"{redact_config_payload(data.payload)}"
+            )
             if self.current_session is None or data.caller_identity != participant.identity:
                 logger.info("update_config called by non-participant or no session")
                 return json.dumps({"changed": False})
 
             new_config = parse_session_config(json.loads(data.payload))
-            if self.current_config != new_config:
-                logger.info(
-                    f"config changed: {new_config.to_dict()}, participant: {participant.identity}"
-                )
-                old_config = self.current_config
-                self.current_config = new_config
-                await self.replace_session(ctx, participant, new_config, old_config)
-                return json.dumps({"changed": True})
-            else:
+            # The browser only sends a key the user typed in; when the key lives
+            # on the server the field is empty and must not wipe the one in use.
+            new_config.gemini_api_key = (
+                new_config.gemini_api_key or self.current_config.gemini_api_key
+            )
+
+            old_config = self.current_config
+            if old_config == new_config:
                 logger.info("config not changed at all")
                 return json.dumps({"changed": False})
+
+            self.current_config = new_config
+            self.gate.settings.update(
+                (new_config.meeting_config or {}).get("intervention") or {}
+            )
+
+            if old_config.session_fingerprint() == new_config.session_fingerprint():
+                logger.info(f"intervention settings updated: {self.gate.settings.to_dict()}")
+                await self.publish_intervention_settings()
+                return json.dumps({"changed": True, "restarted": False})
+
+            logger.info(f"config changed, restarting the session for {participant.identity}")
+            await self.replace_session(ctx, participant, new_config, old_config)
+            return json.dumps({"changed": True, "restarted": True})
 
         # Register RPC method for advancing agenda from frontend
         @ctx.room.local_participant.register_rpc_method("pg.advanceAgenda")
@@ -1098,6 +1863,7 @@ class SessionManager:
                 target_idx = self.clamp_agenda_index(int(item_index))
                 self.current_agenda_index = target_idx
                 self.called_attendee_ids = set()
+                self.on_agenda_changed()
                 await self.publish_meeting_data({
                     "type": "advance_agenda",
                     "currentAgendaIndex": target_idx,
@@ -1115,32 +1881,88 @@ class SessionManager:
                 payload = json.loads(data.payload) if data.payload else {}
                 reason = payload.get("reason", "讨论内容偏离当前议程核心目标")
 
-                await self.publish_meeting_data({
-                    "type": "drift_warning",
-                    "active": True,
-                    "reason": reason,
-                })
+                # A person asked for it: always granted, and it restarts the
+                # cooldown so the detectors do not pile on right afterwards.
+                intervention = self.gate.try_acquire("manual")
+                intervention.reason = reason
+                intervention.transcript_at = self.last_transcript_wall or None
 
-                cfg = self.current_config.meeting_config or {}
-                agendas = cfg.get("agendas", [])
-                idx = self.current_agenda_index
-                cur_title = agendas[idx].get("title", f"第 {idx + 1} 项议题") if 0 <= idx < len(agendas) else "当前议题"
-                cur_goal = agendas[idx].get("goal", "") if 0 <= idx < len(agendas) else ""
+                # 半自动模式下点「打断并引导」：沿用那条建议的判定结果
+                suggestion = self.last_suggestion
+                if suggestion and suggestion.get("suggestionId") == payload.get("suggestionId"):
+                    intervention.reason = suggestion.get("reason") or reason
+                    intervention.reason_code = suggestion.get("reasonCode") or ""
+                    intervention.confidence = suggestion.get("confidence")
+                    self.last_suggestion = None
+
+                if self.detector is not None:
+                    self.detector.reset()
+                await self.publish_drift_warning(intervention)
 
                 if self.current_session:
-                    prompt = (
-                        f"【主持人紧急强行切入叫停指令】：参会人员发言正在偏离议题。请立即用清脆、权威、响亮的声音开麦强行打断，"
-                        f"第一句必须明确叫停：“打扰一下，请大家先暂停一下！” 紧接着说明：“我们当前正在进行的是议题【{cur_title}】，"
-                        f"核心目标是【{cur_goal}】。刚才讨论已脱离本议题，请大家立刻收束，回到当前议题的核心讨论！”"
-                        f"态度果断有力，绝对不可退缩！"
-                    )
                     # Not awaited: the RPC must return before LiveKit's timeout,
                     # and the speech itself is scheduled by the session.
-                    self.cue_model(prompt, allow_interruptions=False)
+                    intervention.handle = self.speak_interruption(intervention)
 
-                return json.dumps({"success": True})
+                return json.dumps({"success": True, "interventionId": intervention.id})
             except Exception as err:
                 logger.error(f"Error handling forceIntervene RPC: {err}")
+                return json.dumps({"success": False, "error": str(err)})
+
+        # 撤销打断：AI 判断错了，让发言人继续
+        @ctx.room.local_participant.register_rpc_method("pg.undoIntervene")
+        async def undo_intervene_rpc(data: rtc.rpc.RpcInvocationData):
+            logger.info(f"pg.undoIntervene called by {data.caller_identity}: {data.payload}")
+            try:
+                payload = json.loads(data.payload) if data.payload else {}
+
+                # 半自动模式下点「忽略」：没有人被打断，只记一次误判
+                if payload.get("dismissed"):
+                    suggestion, self.last_suggestion = self.last_suggestion, None
+                    if suggestion:
+                        self.gate.record_false_positive({
+                            **suggestion,
+                            "threshold": self.gate.settings.threshold,
+                            "dismissed": True,
+                        })
+                    return json.dumps({"success": True})
+
+                intervention = self.gate.undo(payload.get("interventionId"))
+                if intervention is None:
+                    return json.dumps({"success": False, "error": "没有可撤销的打断"})
+
+                await self.silence_intervention(intervention)
+                logger.info(
+                    f"intervention {intervention.id} undone "
+                    f"(source={intervention.source}, confidence={intervention.confidence}); "
+                    f"{len(self.gate.false_positives)} false positives so far"
+                )
+                await self.publish_meeting_data({
+                    "type": "intervention_undone",
+                    "interventionId": intervention.id,
+                    "cooldownSeconds": int(self.gate.cooldown_remaining()),
+                    "falsePositive": self.gate.false_positives[-1],
+                })
+                return json.dumps({"success": True})
+            except Exception as err:
+                logger.error(f"Error handling undoIntervene RPC: {err}")
+                return json.dumps({"success": False, "error": str(err)})
+
+        # 会中切换介入模式 / 阈值 / 冷却：原地生效，不重建会话
+        @ctx.room.local_participant.register_rpc_method("pg.updateIntervention")
+        async def update_intervention_rpc(data: rtc.rpc.RpcInvocationData):
+            logger.info(f"pg.updateIntervention called by {data.caller_identity}: {data.payload}")
+            try:
+                payload = json.loads(data.payload) if data.payload else {}
+                self.gate.settings.update(payload if isinstance(payload, dict) else {})
+                if self.current_config.meeting_config is not None:
+                    self.current_config.meeting_config["intervention"] = (
+                        self.gate.settings.to_dict()
+                    )
+                await self.publish_intervention_settings()
+                return json.dumps({"success": True, **self.gate.settings.to_dict()})
+            except Exception as err:
+                logger.error(f"Error handling updateIntervention RPC: {err}")
                 return json.dumps({"success": False, "error": str(err)})
 
         # Greet the user (RPC endpoints are live by this point, so a participant
@@ -1148,28 +1970,6 @@ class SessionManager:
         self.cue_model(
             OPENING_CUE_MEETING if self.current_config.meeting_config else OPENING_CUE_DEFAULT
         )
-
-    async def send_image_to_frontend(self, prompt: str, image_data: bytes):
-        if not self.ctx or not self.participant:
-            logger.warning("Cannot send image: no context or participant")
-            return
-
-        try:
-            writer = await self.ctx.room.local_participant.stream_bytes(
-                name="generated_image.jpg",
-                total_size=len(image_data),
-                mime_type="image/jpeg",
-                topic="nano_banana_image",
-                destination_identities=[self.participant.identity],
-                attributes={"prompt": prompt, "type": "nano_banana_image"},
-            )
-
-            await writer.write(image_data)
-            await writer.aclose()
-
-            logger.info(f"Image streamed to frontend, prompt: {prompt}")
-        except Exception as e:
-            logger.error(f"Failed to send image to frontend: {e}")
 
     @utils.log_exceptions(logger=logger)
     async def replace_session(self, ctx: JobContext, participant: rtc.RemoteParticipant, config: SessionConfig, old_config: SessionConfig):
@@ -1184,18 +1984,9 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"Could not preserve chat context: {e}")
 
-        was_nano_banana_enabled = old_config.nano_banana_enabled
-        is_nano_banana_enabled = config.nano_banana_enabled
-        nano_banana_newly_enabled = not was_nano_banana_enabled and is_nano_banana_enabled
-
-        logger.info(f"Nano Banana status: was={was_nano_banana_enabled}, now={is_nano_banana_enabled}, newly_enabled={nano_banana_newly_enabled}")
-
         await self.current_session.aclose()
 
         tools = []
-        if config.nano_banana_enabled:
-            tools.append(create_generate_image_tool(self))
-
         if config.meeting_config:
             tools.extend(create_meeting_tools(self))
             if not self.monitor_task or self.monitor_task.done():
@@ -1210,30 +2001,38 @@ class SessionManager:
             tools=tools,
             chat_ctx=chat_ctx
         )
+        self.attach_session_events(self.current_session)
 
         await self.current_session.start(
             room=ctx.room,
             agent=self.current_agent,
         )
 
+        if config.meeting_config:
+            # The new session is handed the conversation so far and tends to
+            # react to it as if it had just been said.
+            self.gate.hold(OPENING_GRACE_SECONDS)
+            self.start_detector()
+        else:
+            await self.stop_detector()
+
         # Best effort: on gemini-3.1 the replayed (text) history makes the model
         # answer the very first realtime *text* turn as text only, so this
         # announcement may stay silent there; normal audio turns are unaffected.
         try:
-            if nano_banana_newly_enabled:
-                logger.info("Nano Banana tool newly enabled")
-                self.cue_model(
-                    "Briefly and enthusiastically announce: 'Nano Banana now active, feel free to ask me to generate an image and I can show you whatever you like!'",
-                )
-            elif config.meeting_config and not old_config.meeting_config:
+            if config.meeting_config and not old_config.meeting_config:
                 logger.info("Meeting mode newly enabled")
                 self.cue_model(
                     "Briefly announce that Meeting Moderator mode is now active with the configured agenda.",
                 )
+            elif config.meeting_config:
+                # A settings change during a meeting is not something to
+                # announce: the moderator would talk over the discussion.
+                logger.info("Session restarted with new config (meeting in progress, no announcement)")
             else:
                 logger.info("Session restarted with new config")
                 self.cue_model(
-                    is_nano_banana_enabled and "Briefly acknowledge that your configuration has been updated and you're ready to continue and announce that you can also generate images now!" or "Briefly acknowledge that your configuration has been updated and you're ready to continue"
+                    "Briefly acknowledge that your configuration has been updated and you're ready to continue"
                 )
         except Exception as e:
             logger.error(f"Failed to notify user about config change: {e}")

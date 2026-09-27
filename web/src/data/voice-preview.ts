@@ -1,14 +1,14 @@
 /**
  * 音色试听用的固定示例语句。
  *
- * 刻意选用主持人「强行叫停 + 拉回议题」的实际台词，而不是中性的问候语——
- * 用户要判断的是这个音色在真实会议里叫停跑题时够不够有权威感、听不听得清，
- * 用一句「你好，我是 AI 助手」是判断不出来的。
+ * 刻意选用主持人打断跑题时的实际台词（与 agent/intervention.py 的话术一致），
+ * 而不是中性的问候语——用户要判断的是这个音色在真实会议里打断跑题时
+ * 够不够有权威感、听不听得清，用一句「你好，我是 AI 助手」是判断不出来的。
  *
  * 文本固定不变，因此每个音色只需合成一次即可长期复用（见 /api/voice-preview 的磁盘缓存）。
  */
 export const VOICE_PREVIEW_TEXT =
-  "打扰一下，请大家先暂停一下。我们当前的议题是上月完成率，核心目标是确认完成情况与偏差原因。刚才的讨论已经偏离本议题，请回到当前议题上来。";
+  "各位，先停一下。这个话题我们会后再聊，现在先回到「上月完成率」。";
 
 /** 试听音频的会话内缓存：音色 -> object URL，避免同一次使用里重复请求 */
 const previewCache = new Map<string, string>();
@@ -56,11 +56,21 @@ export async function playVoicePreview(
   let url = previewCache.get(voice);
 
   if (!url) {
-    const res = await fetch("/api/voice-preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey: apiKey || undefined, voice }),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/voice-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: apiKey || undefined, voice }),
+      });
+    } catch {
+      // fetch 本身抛错 = 请求没有到达服务端（服务已停止、断网），浏览器只会给一句
+      // "Failed to fetch"，看不出原因
+      throw new VoicePreviewError(
+        "连接不到本页面的服务，服务可能已经停止。请确认服务在运行，然后刷新页面再试。",
+        "SERVER_UNREACHABLE"
+      );
+    }
 
     if (!res.ok) {
       let message = `试听失败（HTTP ${res.status}）`;
@@ -91,5 +101,17 @@ export async function playVoicePreview(
     onEnded?.();
   });
 
-  await audio.play();
+  try {
+    await audio.play();
+  } catch (err) {
+    if (currentAudio === audio) currentAudio = null;
+    // 被新的一次试听打断不算失败
+    if (err instanceof DOMException && err.name === "AbortError") return;
+    throw new VoicePreviewError(
+      err instanceof DOMException && err.name === "NotAllowedError"
+        ? "浏览器拦截了自动播放，请再点一次试听。"
+        : "示例语音已生成，但浏览器无法播放。",
+      "PLAYBACK_FAILED"
+    );
+  }
 }

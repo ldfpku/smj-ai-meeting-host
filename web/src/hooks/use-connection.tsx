@@ -20,6 +20,8 @@ type TokenGeneratorData = {
   token: string;
   pgState: PlaygroundState;
   voice: VoiceId;
+  /** 本场会议的房间名，同时用作本地会议记录的键 */
+  roomName: string;
   disconnect: () => Promise<void>;
   connect: ConnectFn;
 };
@@ -38,7 +40,14 @@ export const ConnectionProvider = ({
     token: string;
     shouldConnect: boolean;
     voice: VoiceId;
-  }>({ wsUrl: "", token: "", shouldConnect: false, voice: VoiceId.PUCK });
+    roomName: string;
+  }>({
+    wsUrl: "",
+    token: "",
+    shouldConnect: false,
+    voice: VoiceId.PUCK,
+    roomName: "",
+  });
 
   const { pgState } = usePlaygroundState();
 
@@ -51,20 +60,21 @@ export const ConnectionProvider = ({
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(playgroundStateHelpers.getStateWithFullInstructions(pgState)),
+      body: JSON.stringify(pgState),
     });
 
     if (!response.ok) {
       throw new Error("Failed to fetch token");
     }
 
-    const { accessToken, url } = await response.json();
+    const { accessToken, url, roomName } = await response.json();
 
     setConnectionDetails({
       wsUrl: url,
       token: accessToken,
       shouldConnect: true,
       voice: pgState.sessionConfig.voice,
+      roomName: roomName || `meeting-${Date.now()}`,
     });
   };
 
@@ -95,6 +105,7 @@ export const ConnectionProvider = ({
         token: connectionDetails.token,
         shouldConnect: connectionDetails.shouldConnect,
         voice: connectionDetails.voice,
+        roomName: connectionDetails.roomName,
         pgState,
         connect,
         disconnect,
