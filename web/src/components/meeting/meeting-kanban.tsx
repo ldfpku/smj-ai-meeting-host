@@ -325,7 +325,7 @@ export function MeetingKanban({
               size="icon"
               onClick={onOpenConfigModal}
               className="h-8 w-8 text-muted-foreground hover:text-foreground"
-              title="选择会议模板 / 修改议程与参会人"
+              title="从文档导入 / 选择会议模板 / 修改议程与参会人"
             >
               <Settings className="w-4 h-4" />
             </Button>

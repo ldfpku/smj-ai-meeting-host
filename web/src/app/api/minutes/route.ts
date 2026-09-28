@@ -1,7 +1,8 @@
 import path from "node:path";
 import dotenv from "dotenv";
 import type { AiMinutes } from "@/data/meeting-minutes";
-import { ChatStreamReader, parseJsonObject } from "@/lib/model-output";
+import { askWorker as askGateway, isWorkerConfigured, WorkerError } from "@/lib/ai-worker";
+import { parseJsonObject } from "@/lib/model-output";
 import { proxyFetch } from "@/lib/proxy-fetch";
 
 // 密钥放在仓库根目录的 .env.local（与 /api/token 一致），Next 默认只读 web/.env.local
@@ -26,11 +27,7 @@ const GEMINI_MODEL =
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
 
-const WORKER_URL = process.env.AI_WORKER_URL?.trim().replace(/\/+$/, "");
-const WORKER_KEY = process.env.AI_WORKER_KEY?.trim();
 const WORKER_MODEL = process.env.AI_WORKER_MODEL?.trim() || "glm-5.3-flash";
-/** 网关上的模型默认会先长篇思考（实测 4 分钟），整理纪要用不着 */
-const WORKER_REASONING_EFFORT = "low";
 const WORKER_TIMEOUT_MS = 180_000;
 
 type Provider = "worker" | "gemini";
@@ -400,7 +397,7 @@ export async function POST(request: Request) {
 
 function availableProviders(): Provider[] {
   const configured: Provider[] = [];
-  if (WORKER_URL && WORKER_KEY) configured.push("worker");
+  if (isWorkerConfigured()) configured.push("worker");
   if (process.env.GEMINI_API_KEY?.trim()) configured.push("gemini");
 
   const only = process.env.MINUTES_PROVIDER?.trim().toLowerCase();
@@ -411,63 +408,19 @@ function availableProviders(): Provider[] {
 }
 
 async function askWorker(input: string): Promise<string> {
-  const upstream = await proxyFetch(`${WORKER_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${WORKER_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  try {
+    return await askGateway({
       model: WORKER_MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_INSTRUCTION + JSON_SHAPE },
-        { role: "user", content: input },
-      ],
-      reasoning_effort: WORKER_REASONING_EFFORT,
-      temperature: 0.2,
-      max_tokens: 8192,
-      // 流式：整理要二三十秒，不流式的连接会在中途被断开
-      stream: true,
-    }),
-    signal: AbortSignal.timeout(WORKER_TIMEOUT_MS),
-  });
-
-  if (!upstream.ok || !upstream.body) {
-    const detail = await upstream.text().catch(() => "");
-    console.error(
-      `Minutes (worker) failed (${upstream.status}):`,
-      detail.slice(0, 300)
-    );
-    throw new ProviderError(
-      upstream.status === 401 || upstream.status === 403
-        ? "密钥无效（AI_WORKER_KEY）。"
-        : upstream.status === 404
-        ? `网关上没有模型 ${WORKER_MODEL}（AI_WORKER_MODEL）。`
-        : upstream.status === 429
-        ? "请求过于频繁，请稍后再试。"
-        : `请求失败（HTTP ${upstream.status}）。`,
-      upstream.status
-    );
+      system: SYSTEM_INSTRUCTION + JSON_SHAPE,
+      input,
+      maxTokens: 8192,
+      timeoutMs: WORKER_TIMEOUT_MS,
+      truncatedMessage: "输出被截断，纪要不完整。",
+    });
+  } catch (err) {
+    if (err instanceof WorkerError) throw new ProviderError(err.message, err.status);
+    throw err;
   }
-
-  const reader = new ChatStreamReader();
-  const decoder = new TextDecoder();
-  const body = upstream.body.getReader();
-  for (;;) {
-    const { done, value } = await body.read();
-    if (done) break;
-    reader.push(decoder.decode(value, { stream: true }));
-  }
-  reader.push(decoder.decode());
-  reader.end();
-
-  if (reader.finishReason === "length") {
-    throw new ProviderError("输出被截断，纪要不完整。", 502);
-  }
-  if (!reader.content.trim()) {
-    throw new ProviderError("没有返回内容。", 502);
-  }
-  return reader.content;
 }
 
 async function askGemini(input: string): Promise<string> {

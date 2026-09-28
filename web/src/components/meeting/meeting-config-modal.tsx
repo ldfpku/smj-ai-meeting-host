@@ -39,6 +39,8 @@ import {
   getRolesByDept,
 } from "@/data/smj-org";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
+import { MeetingImport } from "@/components/meeting/meeting-import";
+import type { ImportedMeeting } from "@/lib/meeting-import";
 
 interface MeetingConfigModalProps {
   open: boolean;
@@ -107,6 +109,20 @@ export function MeetingConfigModal({
     setEscalationPath(cfg.escalationPath || "");
     setAgendas(cfg.agendas);
     setAttendees(cfg.attendees);
+    setError(null);
+  };
+
+  // 文档里没写的项回到默认值，不沿用上一场会议的
+  const applyImport = (meeting: ImportedMeeting) => {
+    setTemplateId("");
+    setMeetingType(meeting.meetingType || "");
+    setTopic(meeting.topic);
+    setChair(meeting.chair || "");
+    setStyle(meeting.style || "strict");
+    setRequirePreRead(!!meeting.requirePreRead);
+    setEscalationPath(meeting.escalationPath || "");
+    setAgendas(meeting.agendas);
+    setAttendees(meeting.attendees);
     setError(null);
   };
 
@@ -208,13 +224,15 @@ export function MeetingConfigModal({
             <div>
               <DialogTitle className="text-xl">会议配置</DialogTitle>
               <DialogDescription>
-                选择公司标准会议模板，或自定义议程与参会人。主持人将依此控时、点名、催办决议。
+                从会议文档导入、选择公司标准会议模板，或自定义议程与参会人。主持人将依此控时、点名、催办决议。
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         <div className="space-y-6 py-2">
+          <MeetingImport onImported={applyImport} />
+
           {/* 会议模板 */}
           <div className="space-y-2">
             <Label className="text-base font-semibold">公司标准会议模板</Label>
@@ -270,6 +288,9 @@ export function MeetingConfigModal({
                     {r.title}
                   </option>
                 ))}
+                {chair && !SMJ_ROLES.some((r) => r.title === chair) && (
+                  <option value={chair}>{chair}</option>
+                )}
               </select>
             </div>
             <div className="space-y-2">
@@ -491,6 +512,10 @@ export function MeetingConfigModal({
                           {d.name}
                         </option>
                       ))}
+                      {a.dept &&
+                        !SMJ_DEPARTMENTS.some((d) => d.name === a.dept) && (
+                          <option value={a.dept}>{a.dept}</option>
+                        )}
                     </select>
                     <select
                       className={`${selectClass} col-span-3`}
