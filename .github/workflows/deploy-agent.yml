@@ -29,7 +29,7 @@ jobs:
             subdomain = "smj-agitdtnk"
 
           [agent]
-            id = "CA_K5ABztZkb3G4"
+            id = "CA_ar8ZeFi4evsN"
           EOF
           echo "✅ Created temporary livekit.toml for deployment"
           cat agent/livekit.toml

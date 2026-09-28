@@ -619,7 +619,9 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
 
     wrap = steps.get("wrap_up")
     if wrap:
-        closing = meeting.moderator_text_since(wrap["start"])
+        # a moderator that sums up before it is asked has done its job
+        before = meeting.steps[max(0, meeting.steps.index(wrap) - 1)]
+        closing = meeting.moderator_text_since(before["start"])
         check(
             "会议总结",
             bool(re.search(r"决议|未决", closing)),
