@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, Trash2, Clock, Target, Users, Paperclip } from "lucide-react";
+import { Plus, Trash2, Clock, Target, Users, Paperclip, Mic } from "lucide-react";
 import {
   MeetingConfig,
   AgendaItem,
@@ -622,6 +622,19 @@ export function MeetingConfigModal({
                     />
                   </div>
 
+                  <div className="flex items-center gap-2">
+                    <Mic className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                    <Input
+                      value={item.presenter || ""}
+                      onChange={(e) =>
+                        handleUpdateAgenda(item.id, "presenter", e.target.value)
+                      }
+                      list="meeting-presenters"
+                      placeholder="汇报人：议题开始时请谁先介绍情况（可选）"
+                      className="text-xs h-8"
+                    />
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     <select
                       className={selectClass}
@@ -653,6 +666,15 @@ export function MeetingConfigModal({
               ))}
             </div>
           </div>
+
+          <datalist id="meeting-presenters">
+            {attendees
+              .map((a) => a.name.trim() || a.role.trim())
+              .filter(Boolean)
+              .map((label) => (
+                <option key={label} value={label} />
+              ))}
+          </datalist>
 
           {error && (
             <div className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-md">

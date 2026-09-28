@@ -58,6 +58,7 @@
       "consecutiveHits": 1
     }
   },
+  "pronounce": ["总经理", "温控器"],
   "voices": {
     "王部长": "Charon",
     "李工": "Orus",

@@ -77,6 +77,8 @@ const defaultInitialMeetingLiveState: MeetingLiveState = {
   driftScore: null,
   intervention: defaultInterventionSettings,
   detectorActive: false,
+  ending: null,
+  endedMessage: null,
 };
 
 /**
@@ -214,6 +216,23 @@ function reduceMeetingUpdate(
         ...prev,
         intervention: { ...prev.intervention, ...data.intervention },
       };
+    case "meeting_ending":
+      if (data.active === false) return { ...prev, ending: null };
+      return {
+        ...prev,
+        ending: {
+          reason: data.reason === "limit" ? "limit" : "idle",
+          message: data.message ?? "",
+          endsAt: Date.now() + (data.secondsLeft ?? 60) * 1000,
+        },
+      };
+    case "meeting_ended":
+      return {
+        ...prev,
+        ending: null,
+        isFinished: true,
+        endedMessage: data.message ?? "会议已结束。",
+      };
     case "state_sync":
       return { ...prev, ...data.state };
     default:
@@ -227,7 +246,7 @@ const AgentContext = createContext<AgentContextType | undefined>(undefined);
 
 export function AgentProvider({ children }: { children: React.ReactNode }) {
   const room = useMaybeRoomContext();
-  const { shouldConnect, roomName, pgState } = useConnection();
+  const { shouldConnect, roomName, pgState, disconnect } = useConnection();
   const { agent } = useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
   const [rawSegments, setRawSegments] = useState<{
@@ -296,6 +315,16 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         ]);
       } else if (data.type === "drift_suggestion") {
         playAttentionChime();
+      } else if (data.type === "meeting_ending" && data.active !== false) {
+        playAttentionChime();
+      } else if (data.type === "meeting_ended") {
+        // agent 随后会关闭房间；这里主动断开，麦克风立即停止采集
+        toast({
+          title: "会议已结束",
+          description:
+            (data.message ?? "") + " 转写和决议已保存在本机，可继续生成纪要。",
+        });
+        disconnect();
       } else if (data.type === "intervention_metrics") {
         setInterventions((prev) =>
           prev.map((i) =>
@@ -324,7 +353,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     return () => {
       room.off(RoomEvent.DataReceived, handleDataReceived);
     };
-  }, [room]);
+  }, [room, toast, disconnect]);
 
   useEffect(() => {
     if (!room) {

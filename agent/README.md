@@ -104,10 +104,18 @@ script only speaks; interrupting, recording, the roll call, moving on and closin
 to the moderator. It ends with a list of checks and writes `report.md`, `minutes.md` and
 `events.json` to `sim/runs/<time>/`.
 
+The moderator's audio is recorded and transcribed after the meeting (the lines `heard`
+in the output): what it said is compared with what it meant to say, for the words listed
+under `pronounce` in the scenario. The transcription makes mistakes of its own, so a
+mismatch is a reason to listen, not a verdict.
+
 It needs the agent (`lk agent dev main.py`, with `LIVEKIT_AGENT_NAME=smjar-dev`) and, for
 the minutes, the web app on `http://localhost:3000`. The meeting is described in
 `sim/scenario.json`. Every run uses the real services and costs what a three-minute
 meeting costs.
+
+The web app has a simulated meeting of its own (the 演示会议 button), which runs in
+the browser against whatever agent the page is connected to, the deployed one included.
 
 ## CI/CD Deployment to LiveKit Cloud
 
@@ -176,6 +184,8 @@ agent/
 ├── fast_transcript.py   # Streaming transcript for the detection (hears mid-sentence)
 ├── spoken_clips.py      # Interruptions synthesised ahead of time
 ├── direct_voice.py      # Plays them on a track of their own, at once
+├── meeting_limits.py    # When a meeting ends by itself (silence, length)
+├── speech_gate.py       # Drops the sound that comes with a "I say nothing" answer
 ├── sim/                 # Simulated meeting (uv run python sim/run.py)
 ├── tests/               # Unit tests (uv run pytest)
 ├── pyproject.toml       # Python project & dependencies (uv)

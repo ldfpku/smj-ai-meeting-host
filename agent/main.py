@@ -53,7 +53,9 @@ from intervention import (
     InterventionSettings,
     spoken_interruption,
 )
+from meeting_limits import IDLE, LIMIT, End, LimitWatch, MeetingLimits, Notice
 from model_caps import resolve_model
+from speech_gate import Answer, SpeechGate
 from spoken_clips import SpokenClips
 
 # Load .env.local from current directory or parent directory
@@ -83,6 +85,8 @@ CUE_FALLBACK_SECONDS = 6.0
 #: A Live session that "thinks" for this long is considered stuck.
 DEAF_SECONDS = 30
 STUCK_THINKING_SECONDS = 45.0
+#: "speaking", but no audio has come from the model for this long
+STUCK_SPEAKING_SECONDS = 20.0
 #: Languages spoken in the meetings, as hints for the input transcription.
 FAST_TRANSCRIPT_MODEL = "gemini-3.5-transcribe-live"
 MEETING_LANGUAGE_CODES = ["cmn-Hans-CN", "en-US"]
@@ -126,12 +130,14 @@ def redact_config_payload(payload: str) -> str:
 OPENING_CUE_MEETING = (
     "【系统提示】会议现在开始。请立即按照你的开场要求开口："
     "清晰简短地播报会议名称、总时长与各项议题，然后宣布讨论正式开始。"
+    "最后一句照原话说：“{first_words}”说完就停。"
     "不要复述本提示。"
 )
 #: Without this the model paraphrases the interruption and keeps adding to it.
 SAY_EXACTLY = (
     "只说下面引号里的话，照原话说，说完就停。"
-    "不要加别的话，不要解释原因，不要复述本指令。语气平稳、坚定，语速正常。"
+    "不要加别的话，不要解释原因，不要复述本指令。语气平稳、坚定，语速正常，"
+    "每个字都念出来，岗位名称不要缩略（「总经理」不要念成「总理」）。"
 )
 OPENING_CUE_DEFAULT = (
     "Please begin the interaction with the user in a manner consistent with your instructions."
@@ -297,6 +303,11 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(session_manager.stop_detector)
     await session_manager.start_session(ctx, participant)
 
+    @ctx.room.on("participant_disconnected")
+    def _participant_left(p: rtc.RemoteParticipant):
+        if p.identity == participant.identity:
+            session_manager._spawn(session_manager.end_if_abandoned())
+
     logger.info("agent started")
 
 
@@ -358,6 +369,111 @@ def same_matter(a: str, b: str, threshold: float = 0.6) -> bool:
     if not a or not b:
         return False
     return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+def shared_characters(a: str, b: str) -> float:
+    """How much of the shorter text's characters the other one has too.
+    Unlike same_matter it does not care about the order of the words."""
+    left = {c for c in squash(a) if c.isalnum()}
+    right = {c for c in squash(b) if c.isalnum()}
+    if not left or not right:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
+
+
+#: a matter that comes up again within this time is the same matter
+REPEATED_WITHIN_MS = 120_000
+
+
+def same_open_item(issue: str, reason: str, known: dict, now_ms: int) -> bool:
+    """Whether an open item is the one already on the board.
+
+    The model records an item when it first hears "今天定不下来" and again
+    when somebody proposes to record it, each time in its own words.
+    """
+    if same_matter(issue + reason, known.get("issue", "") + known.get("reason", "")):
+        return True
+    if same_matter(issue, known.get("issue", "")):
+        return True
+    recent = now_ms - known.get("updatedAt", known.get("timestamp", 0)) < REPEATED_WITHIN_MS
+    return recent and shared_characters(issue, known.get("issue", "")) >= 0.5
+
+
+def spoken_open_item(owner: str, escalate_to: str) -> str:
+    """What the moderator says after recording an open item.
+
+    The escalation path is a phrase of its own ("提请总经理签批并留档"), so it
+    is not put behind "升级到": the model stumbled over that and was heard
+    saying 总理 for 总经理.
+    """
+    path = (escalate_to or "").strip().rstrip("。")
+    who = owner or "相关责任人"
+    sentence = f"这条今天定不了，记为未决事项，由{who}跟进。"
+    if not path:
+        return sentence
+    if path.startswith(("提请", "上报", "报", "提交", "交")) and "；" not in path:
+        return sentence + f"会后{path}。"
+    return sentence + f"升级路径是：{path}。"
+
+
+def spoken_summary(decisions: list[dict], open_items: list[dict]) -> str:
+    """The closing summary. Put together here and not by the model: the
+    numbers are right, and it is said in the prepared voice."""
+    parts = []
+    if decisions:
+        incomplete = [d for d in decisions if missing_decision_fields(d)]
+        parts.append(
+            f"本次会议共形成 {len(decisions)} 条决议，"
+            + (f"其中 {len(incomplete)} 条四要素还不齐全" if incomplete else "四要素齐全")
+        )
+    else:
+        parts.append("本次会议没有形成决议")
+    if open_items:
+        owners = list(dict.fromkeys(o.get("owner") for o in open_items if o.get("owner")))
+        parts.append(
+            f"另有 {len(open_items)} 条未决事项"
+            + (f"，由{'、'.join(owners)}跟进" if owners else "")
+        )
+    else:
+        parts.append("没有未决事项")
+    return "；".join(parts) + "。会议到此结束，谢谢各位。"
+
+
+def create_summarize_meeting_tool(session_manager: SessionManager):
+    raw_schema = {
+        "type": "function",
+        "name": "summarize_meeting",
+        "description": (
+            "会议收尾：向全场宣布已形成几条决议、还有几条未决事项。"
+            "有人要求做总结或结束会议时，或最后一项议题谈完时调用。"
+            "总结由系统宣布，你不要自己口头总结。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+
+    @function_tool(raw_schema=raw_schema)
+    @logged_tool
+    async def summarize_meeting(raw_arguments: dict) -> str:
+        if time.time() - session_manager.summarized_at < 60:
+            return "总结刚才已经向全场宣布过，不要再宣布，保持静默。"
+        session_manager.summarized_at = time.time()
+        sentence = spoken_summary(session_manager.decisions, session_manager.open_items)
+        await session_manager.publish_meeting_data({"type": "meeting_summary", "text": sentence})
+        if session_manager.announce(sentence):
+            # the sentence is not quoted: given the words, the model says them too
+            return "系统会替你向全场宣布会议总结。你不要总结，也不要说别的，保持静默。"
+        return f"{SAY_EXACTLY}\n“{sentence}”"
+
+    return summarize_meeting
+
+
+def spoken_open_item_owner(owner: str) -> str:
+    """Said when an open item was announced with somebody else to follow it up."""
+    return f"更正一下：这条未决事项由{owner}跟进。"
 
 
 def create_get_meeting_timer_tool(session_manager: SessionManager):
@@ -451,6 +567,7 @@ def create_advance_agenda_tool(session_manager: SessionManager):
     @function_tool(raw_schema=raw_schema)
     @logged_tool
     async def advance_agenda(raw_arguments: dict) -> str:
+        session_manager.let_model_speak()
         try:
             item_index = int(raw_arguments.get("item_index", 1))
         except (ValueError, TypeError):
@@ -512,7 +629,8 @@ def create_advance_agenda_tool(session_manager: SessionManager):
         planned = f"，计划 {minutes} 分钟" if minutes else ""
         return (
             f"议程已更新至第 {target_idx + 1} 项{note}，看板已同步。"
-            f"{SAY_EXACTLY}\n“现在进入第 {target_idx + 1} 项：「{title}」{planned}。”"
+            f"{SAY_EXACTLY}\n“现在进入第 {target_idx + 1} 项：「{title}」{planned}。"
+            f"{session_manager.first_words(target_idx)}”"
         )
 
     return advance_agenda
@@ -525,6 +643,7 @@ def create_record_decision_tool(session_manager: SessionManager):
         "description": (
             "记录会议中达成的明确决议或 Action Item，同步展示在前台看板和最终纪要中。"
             "公司要求每条决议必须带齐四要素：责任人、完成时限、验证方式、关闭证据。"
+            "四要素只能填会上有人说出来的内容；没有人说过的要素留空，由你当场追问，不要自己编。"
         ),
         "parameters": {
             "type": "object",
@@ -570,6 +689,7 @@ def create_record_decision_tool(session_manager: SessionManager):
     @function_tool(raw_schema=raw_schema)
     @logged_tool
     async def record_decision(raw_arguments: dict) -> str:
+        session_manager.let_model_speak()
         decision_text = raw_arguments.get("decision", "")
         agenda_title = session_manager.canonical_agenda_title(
             raw_arguments.get("agenda_title"), fallback="通用决议"
@@ -609,6 +729,7 @@ def create_record_decision_tool(session_manager: SessionManager):
             "decision": decision_item,
         })
 
+        session_manager.prepare_summary()
         missing = missing_decision_fields(decision_item)
         base = (
             f"已记录决议：【{decision_text}】（议题：{agenda_title}，"
@@ -692,12 +813,15 @@ def create_record_open_item_tool(session_manager: SessionManager):
         # The model records an item when it first hears "今天定不下来" and again
         # when somebody proposes to record it, in other words each time: the
         # second call updates the first instead of adding a twin.
+        owner = raw_arguments.get("owner") or ""
+        now_ms = int(time.time() * 1000)
+
         existing = next(
             (
                 o
                 for o in session_manager.open_items
                 if o.get("agendaTitle") == agenda_title
-                and same_matter(issue + reason, o.get("issue", "") + o.get("reason", ""))
+                and same_open_item(issue, reason, o, now_ms)
             ),
             None,
         )
@@ -706,9 +830,12 @@ def create_record_open_item_tool(session_manager: SessionManager):
             "agendaTitle": agenda_title,
             "issue": issue,
             "reason": reason,
-            "owner": raw_arguments.get("owner") or (existing or {}).get("owner", ""),
+            "owner": owner or (existing or {}).get("owner", ""),
             "escalateTo": escalate_to,
-            "timestamp": existing["timestamp"] if existing else int(time.time() * 1000),
+            "timestamp": existing["timestamp"] if existing else now_ms,
+            "updatedAt": now_ms,
+            "announcedAt": (existing or {}).get("announcedAt", 0),
+            "announcedOwner": (existing or {}).get("announcedOwner", ""),
         }
         if existing:
             session_manager.open_items[session_manager.open_items.index(existing)] = open_item
@@ -720,11 +847,21 @@ def create_record_open_item_tool(session_manager: SessionManager):
             "openItem": open_item,
         })
 
-        return (
+        recorded = (
             f"已登记未决事项：【{issue}】（议题：{agenda_title}，跟进人：{open_item['owner'] or '待定'}，"
-            f"升级路径：{escalate_to}）。请口头明确宣布："
-            f"「这条今天定不了，记为未决事项，由{open_item['owner'] or '相关责任人'}跟进，升级到{escalate_to}。」"
+            f"升级路径：{escalate_to}）。"
         )
+        session_manager.prepare_summary()
+        if not open_item["owner"]:
+            # announced once somebody is named: "由相关责任人跟进" commits nobody
+            return recorded + f"还没有跟进人。{SAY_EXACTLY}\n“这条记为未决事项，由谁跟进？”"
+        if open_item.get("announcedOwner") == open_item["owner"]:
+            return recorded + "这一条已经向全场宣布过，不要再宣布，继续听大家讨论。"
+        if session_manager.announce(session_manager.open_item_wording(open_item["id"])):
+            return recorded + "系统会替你向全场宣布这一条。你不要宣布，也不要说别的，保持静默。"
+        open_item["announcedOwner"] = open_item["owner"]
+        sentence = spoken_open_item(open_item["owner"], escalate_to)
+        return recorded + f"{SAY_EXACTLY}\n“{sentence}”"
 
     return record_open_item
 
@@ -734,9 +871,12 @@ def create_request_speaker_tool(session_manager: SessionManager):
         "type": "function",
         "name": "request_speaker",
         "description": (
-            "点名征询参会人的意见，前台看板会高亮被点到的人。"
+            "点名。有两种用途，用 purpose 区分。"
+            "stance（表态）：议题有了结论或方案之后，征询参会人是否同意，前台看板会高亮被点到的人。"
             "本公司参会人普遍不会主动表态，沉默不等于同意——议题收尾前必须点到所有【必须发言】人员。"
             "一次调用把还没表态的人都点到，不要一人调用一次。"
+            "report（发言）：请某个人先介绍情况或说明看法。议题刚开始、还没有可以表态的内容时，"
+            "或者有人要求你指定发言人时，用这一种，只点最相关的一两位。"
         ),
         "parameters": {
             "type": "object",
@@ -750,6 +890,11 @@ def create_request_speaker_tool(session_manager: SessionManager):
                     "type": "string",
                     "description": "只点一位时可用这个字段",
                 },
+                "purpose": {
+                    "type": "string",
+                    "enum": ["stance", "report"],
+                    "description": "stance：对已有的结论或方案表态（默认）；report：请他先介绍情况、说明看法",
+                },
                 "reason": {
                     "type": "string",
                     "description": "点名征询的角度，只显示在看板上（如'从质量口径看是否接受该让步'）",
@@ -762,6 +907,7 @@ def create_request_speaker_tool(session_manager: SessionManager):
     @function_tool(raw_schema=raw_schema)
     @logged_tool
     async def request_speaker(raw_arguments: dict) -> str:
+        session_manager.let_model_speak()
         names = raw_arguments.get("attendee_names") or []
         if isinstance(names, str):
             names = [names]
@@ -786,6 +932,36 @@ def create_request_speaker_tool(session_manager: SessionManager):
             return (
                 f"参会人名单中没有找到「{'、'.join(unknown)}」。"
                 + (f"当前名单为：{known}。请改用名单中的称呼点名。" if known else "本次会议尚未登记参会人名单，可直接口头点名。")
+            )
+
+        if raw_arguments.get("purpose") == "report":
+            who = "、".join(a.get("name") or a.get("role") or "" for a in found[:2])
+            title = session_manager.current_agenda_title()
+            return (
+                f"{SAY_EXACTLY}\n“请{who}先说一下「{title}」的情况。”"
+            )
+
+        # A stance is a stance on a conclusion. Asked in the middle of the
+        # discussion ("请王部长表个态"), it cuts the discussion short.
+        if session_manager.discussed_current_agenda() and not (
+            session_manager.decisions_for_current_agenda()
+            or session_manager.open_items_for_current_agenda()
+        ):
+            title = session_manager.current_agenda_title()
+            return (
+                f"议题「{title}」还没有结论：没有记录决议，也没有登记未决事项。"
+                "现在不要征询表态，也不要开口，继续听大家讨论。"
+                "有了结论先调用 record_decision 或 record_open_item，再来点名。"
+            )
+
+        # There is nothing to agree to before somebody has said something
+        # about the item: asked for a stance then, people answer "对什么表态？"
+        if not session_manager.discussed_current_agenda():
+            title = session_manager.current_agenda_title()
+            return (
+                f"议题「{title}」还没有人发言，没有可以表态的内容，现在不能征询表态。"
+                "改为请人先介绍情况：再调用一次 request_speaker，purpose 填 report，"
+                "attendee_names 只填与本议题最相关的一位。"
             )
 
         labels = []
@@ -850,6 +1026,7 @@ def create_warn_topic_drift_tool(session_manager: SessionManager):
     @function_tool(raw_schema=raw_schema)
     @logged_tool
     async def warn_topic_drift(raw_arguments: dict) -> str:
+        session_manager.let_model_speak()
         reason = raw_arguments.get("reason", "讨论内容偏离当前议程核心目标")
         return await session_manager.request_model_intervention(reason)
 
@@ -864,6 +1041,7 @@ def create_meeting_tools(session_manager: SessionManager):
         create_record_open_item_tool(session_manager),
         create_request_speaker_tool(session_manager),
         create_warn_topic_drift_tool(session_manager),
+        create_summarize_meeting_tool(session_manager),
     ]
 
 
@@ -875,6 +1053,24 @@ class PlaygroundAgent(Agent):
         else:
             super().__init__(instructions=instructions, tools=tools or [])
         self.session_manager = None
+        # with meeting tools it is the moderator of a meeting held in Chinese
+        self.speech_gate = SpeechGate(
+            on_dropped=self._on_placeholder_dropped, chinese=bool(tools)
+        )
+
+    def _on_placeholder_dropped(self, answer: Answer) -> None:
+        logger.info(
+            f"dropped {answer.dropped_seconds:.1f}s of sound that came with "
+            f"a placeholder: {answer.text[:60]!r}"
+        )
+
+    def realtime_audio_output_node(self, audio, model_settings):
+        return self.speech_gate.audio(audio)
+
+    def transcription_node(self, text, model_settings):
+        return Agent.default.transcription_node(
+            self, self.speech_gate.text(text), model_settings
+        )
 
 
 class SessionManager:
@@ -893,6 +1089,17 @@ class SessionManager:
         self.called_attendee_ids: set[str] = set()
         #: a decision that was recorded but not confirmed aloud yet
         self.unspoken_readback: str = ""
+        #: when the closing summary was last announced
+        self.summarized_at = 0.0
+        #: how much the room has said on the current item (characters)
+        self.heard_chars_on_agenda = 0
+        #: ends a meeting that was forgotten or runs far too long
+        self.limit_watch: LimitWatch | None = None
+        self.limit_task: asyncio.Task | None = None
+        self.ended = False
+        #: configs sent ahead of pg.updateConfig, by the key the browser chose
+        self.received_configs: dict[str, tuple[str, str]] = {}
+        self.config_arrived = asyncio.Event()
         self.overtime_alerted: set[int] = set()
         self.monitor_task: asyncio.Task | None = None
 
@@ -928,10 +1135,154 @@ class SessionManager:
         task.add_done_callback(self._background_tasks.discard)
         return task
 
+    # ---- ending the meeting -------------------------------------------------
+
+    def start_limit_watch(self) -> None:
+        planned = (self.current_config.meeting_config or {}).get("totalDurationMinutes")
+        limits = MeetingLimits.for_meeting(planned)
+        self.limit_watch = LimitWatch(limits, time.monotonic())
+        logger.info(
+            f"the meeting ends by itself after {limits.idle_seconds / 60:.0f} min of "
+            f"silence or at {limits.max_seconds / 60:.0f} min"
+        )
+        if self.limit_task is None or self.limit_task.done():
+            self.limit_task = asyncio.create_task(self._limit_monitor())
+
+    def on_room_heard(self) -> None:
+        watch = self.limit_watch
+        if watch is not None and watch.heard(time.monotonic()):
+            logger.info("somebody spoke: the meeting stays open")
+            self._spawn(self.publish_meeting_data({"type": "meeting_ending", "active": False}))
+
+    async def _limit_monitor(self) -> None:
+        try:
+            while not self.ended:
+                await asyncio.sleep(5)
+                watch = self.limit_watch
+                if watch is None:
+                    continue
+                due = watch.check(time.monotonic())
+                if isinstance(due, End):
+                    await self.end_meeting(due.reason)
+                    return
+                if isinstance(due, Notice):
+                    await self.announce_ending(due)
+        except asyncio.CancelledError:
+            pass
+
+    async def announce_ending(self, notice: Notice) -> None:
+        watch = self.limit_watch
+        if watch is None:
+            return
+        if notice.reason == IDLE:
+            minutes = round(watch.limits.idle_seconds / 60)
+            sentence = (
+                f"已经 {minutes} 分钟没有人发言。会议将在一分钟后自动结束，"
+                "需要继续请直接发言。"
+            )
+        else:
+            age = round((time.monotonic() - watch.started_at) / 60)
+            left = max(round(notice.seconds_left / 60), 1)
+            sentence = (
+                f"会议已经开了 {age} 分钟，将在 {left} 分钟后自动结束。"
+                "需要继续，请在看板上点「延长」。"
+            )
+        logger.info(f"ending announced ({notice.reason}): {sentence}")
+        await self.publish_meeting_data({
+            "type": "meeting_ending",
+            "active": True,
+            "reason": notice.reason,
+            "secondsLeft": int(notice.seconds_left),
+            "message": sentence,
+        })
+        self.cue_model(f"【系统通知】{SAY_EXACTLY}\n“{sentence}”")
+
+    async def end_if_abandoned(self, grace: float = 20.0) -> None:
+        """The browser left. A page that only lost its connection is back
+        within seconds; one that was closed is not."""
+        await asyncio.sleep(grace)
+        if self.ctx is None or self.participant is None:
+            return
+        if self.participant.identity in self.ctx.room.remote_participants:
+            return
+        await self.end_meeting("participant_left")
+
+    async def end_meeting(self, reason: str) -> None:
+        """Stop everything that costs money: the Live session, the
+        transcription, and the room itself."""
+        if self.ended:
+            return
+        self.ended = True
+        watch = self.limit_watch
+        minutes = round((time.monotonic() - watch.started_at) / 60) if watch else 0
+        idle_minutes = round(watch.limits.idle_seconds / 60) if watch else 10
+        message = {
+            IDLE: f"已有 {idle_minutes} 分钟无人发言，会议已自动结束。",
+            LIMIT: f"会议已达到时长上限（{minutes} 分钟），已自动结束。",
+        }.get(reason, "会议已结束。")
+        logger.info(f"ending the meeting after {minutes} min ({reason})")
+        await self.publish_meeting_data({
+            "type": "meeting_ended",
+            "reason": reason,
+            "message": message,
+        })
+        # let the message reach the browser before the room goes away
+        await asyncio.sleep(0.5)
+
+        for task in (self.monitor_task, self.limit_task):
+            if task and not task.done() and task is not asyncio.current_task():
+                task.cancel()
+        try:
+            await self.stop_detector()
+            if self.current_session is not None:
+                await self.current_session.aclose()
+        except Exception as e:
+            logger.warning(f"closing the session failed: {e!r}")
+        if self.ctx is not None:
+            try:
+                await self.ctx.delete_room()
+            except Exception as e:
+                logger.warning(f"deleting the room failed: {e!r}")
+            self.ctx.shutdown(reason=f"meeting ended: {reason}")
+
+    # ---- config updates -----------------------------------------------------
+
+    async def receive_config(self, reader: rtc.TextStreamReader, identity: str) -> None:
+        """Keep a config the browser sent as a text stream until the RPC asks
+        for it. An RPC may carry 15 KB at most, the moderator prompt alone is
+        about 13 KB, so the config travels as a stream and the RPC names it."""
+        key = (reader.info.attributes or {}).get("key", "")
+        text = await reader.read_all()
+        if not key:
+            return
+        self.received_configs[key] = (identity, text)
+        while len(self.received_configs) > 4:
+            self.received_configs.pop(next(iter(self.received_configs)))
+        self.config_arrived.set()
+
+    async def take_config(self, key: str, identity: str, timeout: float = 5.0) -> str | None:
+        deadline = time.time() + timeout
+        while key not in self.received_configs:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return None
+            self.config_arrived.clear()
+            try:
+                await asyncio.wait_for(self.config_arrived.wait(), remaining)
+            except asyncio.TimeoutError:
+                return None
+        sender, text = self.received_configs.pop(key)
+        return text if sender == identity else None
+
     # ---- off-topic handling ----------------------------------------------
+
+    def discussed_current_agenda(self) -> bool:
+        """Whether the room has said anything of substance on this item."""
+        return self.heard_chars_on_agenda >= 30
 
     def on_agenda_changed(self) -> None:
         """A new agenda item starts from a clean slate."""
+        self.heard_chars_on_agenda = 0
         self.gate.hold()
         if self.detector is not None:
             self.detector.reset()
@@ -952,6 +1303,7 @@ class SessionManager:
             self.voice = DirectVoice(self.ctx.room)
         scripts = [self.interruption_script(code) for code in ("", *INTERRUPTION_REASONS)]
         self.clips.prepare(scripts)
+        self.prepare_announcements()
         self._spawn(self._warm_up_voice(scripts[0]))
 
     async def _warm_up_voice(self, script: str) -> None:
@@ -978,6 +1330,96 @@ class SessionManager:
             if speech is not None:
                 return speech
         return self.cue_model(self.intervention_prompt(intervention.reason_code))
+
+    def let_model_speak(self) -> None:
+        """The model is about to be given a sentence to say: what it says
+        next is for the room, even right after an announcement."""
+        gate = getattr(self.current_agent, "speech_gate", None)
+        if gate is not None:
+            gate.keep_next()
+
+    def announce(self, wording) -> bool:
+        """Says a sentence in the prepared voice instead of leaving it to the
+        Live model, which does not always say what it is given: asked for
+        "提请总经理签批", it was heard saying 总理. False when there is no
+        prepared voice: the Live model has to say it then.
+
+        `wording` is the sentence, or a function that returns it (or None for
+        "nothing to say any more"). It is asked at the moment of speaking:
+        what was recorded may have been corrected while the room was talking.
+        """
+        if self.clips is None or self.voice is None:
+            return False
+        gate = getattr(self.current_agent, "speech_gate", None)
+        if gate is not None:
+            # whatever the model answers to the tool is not for the room
+            gate.drop_next()
+        self._spawn(self._announce(wording))
+        return True
+
+    async def _announce(self, wording) -> None:
+        await self.wait_for_pause()
+        sentence = wording() if callable(wording) else wording
+        if not sentence:
+            return
+        clip = await self.clips.wait(sentence, 8.0) if self.clips is not None else None
+        session = self.current_session
+        if clip is not None and session is not None:
+            try:
+                # Through the session, not on the track of the interruptions:
+                # an announcement waits its turn. Played on a track of its own
+                # it came out on top of what the Live model was saying.
+                session.say(sentence, audio=clip.frames())
+                return
+            except Exception as e:
+                logger.warning(f"could not announce in the prepared voice: {e!r}")
+        self.cue_model(f"【系统通知】{SAY_EXACTLY}\n“{sentence}”")
+
+    async def wait_for_pause(self, quiet: float = 1.0, patience: float = 12.0) -> None:
+        """An announcement is not an interruption: it waits until the room
+        has stopped talking, but not for ever."""
+        started = time.monotonic()
+        while time.monotonic() - started < patience:
+            session = self.current_session
+            talking = session is not None and session.user_state == "speaking"
+            heard_ago = time.time() - self.last_transcript_wall
+            if not talking and heard_ago >= quiet and not self.agent_is_speaking():
+                return
+            await asyncio.sleep(0.1)
+
+    def prepare_summary(self) -> None:
+        """Has the closing summary ready for the board as it is now, so that
+        nobody waits for it to be synthesised when it is asked for."""
+        if self.clips is not None:
+            self.clips.prepare([spoken_summary(self.decisions, self.open_items)])
+
+    def prepare_announcements(self) -> None:
+        """The sentences that can be known before the meeting starts."""
+        if self.clips is None:
+            return
+        path = self.escalation_path()
+        names = [a.get("name") or a.get("role") or "" for a in self.meeting_attendees()]
+        self.clips.prepare([spoken_open_item(name, path) for name in names if name])
+        self.clips.prepare([spoken_open_item_owner(name) for name in names if name])
+
+    def open_item_wording(self, item_id: str):
+        """What there is to announce about an open item, asked when the
+        moderator gets to speak."""
+
+        def wording() -> str | None:
+            item = next((o for o in self.open_items if o.get("id") == item_id), None)
+            if item is None or not item.get("owner"):
+                return None
+            said = item.get("announcedOwner")
+            if said == item["owner"]:
+                return None
+            item["announcedOwner"] = item["owner"]
+            item["announcedAt"] = int(time.time() * 1000)
+            if said:
+                return spoken_open_item_owner(item["owner"])
+            return spoken_open_item(item["owner"], item.get("escalateTo", ""))
+
+        return wording
 
     async def _tell_model_what_was_said(self, script: str) -> None:
         """The Live model did not say the sentence and would not know about it."""
@@ -1238,6 +1680,9 @@ class SessionManager:
 
     def on_fast_transcript(self, item_id: str, text: str, final: bool) -> None:
         self.last_transcript_wall = time.time()
+        self.on_room_heard()
+        if final:
+            self.heard_chars_on_agenda += len(squash(text))
         # somebody finished a sentence: the Live model reports it within a
         # few seconds, unless it has gone deaf
         if final and self.unheard_since is None and len(text) >= 10:
@@ -1274,7 +1719,10 @@ class SessionManager:
         def _on_user_input_transcribed(ev) -> None:
             if not ev.transcript:
                 return
+            if ev.is_final:
+                self.heard_chars_on_agenda += len(squash(ev.transcript))
             self.unheard_since = None
+            self.on_room_heard()
             fast = self.fast_transcript
             if fast is not None and fast.healthy:
                 # the detection already heard this, seconds ago
@@ -1385,6 +1833,20 @@ class SessionManager:
     def escalation_path(self) -> str:
         cfg = self.current_config.meeting_config or {}
         return cfg.get("escalationPath") or "提请总经理签批并留档"
+
+    def first_words(self, index: int) -> str:
+        """Who is to speak first on an agenda item. Without it an item starts
+        with everybody waiting for somebody else."""
+        agendas = self.meeting_agendas()
+        if not 0 <= index < len(agendas):
+            return ""
+        agenda = agendas[index]
+        presenter = (agenda.get("presenter") or "").strip()
+        who = presenter or "负责这项工作的同事"
+        title = agenda.get("title", "")
+        if index == 0:
+            return f"先谈第 1 项「{title}」，请{who}先介绍情况。"
+        return f"请{who}先介绍情况。"
 
     def current_agenda_title(self) -> str:
         agendas = self.meeting_agendas()
@@ -1551,6 +2013,17 @@ class SessionManager:
             session.agent_state == "thinking"
             and now - self.agent_state_since >= STUCK_THINKING_SECONDS
         )
+        # Or it hangs in "speaking" with nothing left to say. Seen once: the
+        # answer never ended, and for five minutes the moderator neither heard
+        # a request nor let the off-topic detection interrupt.
+        gate = getattr(self.current_agent, "speech_gate", None)
+        last_audio = gate.last_audio_at if gate is not None else 0.0
+        voiceless = (
+            session.agent_state == "speaking"
+            and now - max(self.agent_state_since, last_audio) >= STUCK_SPEAKING_SECONDS
+            and not (self.voice is not None and self.voice.playing)
+        )
+        stuck = stuck or voiceless
         # The other way of failing: the session looks fine ("listening") but
         # reports nothing of what is being said, while the fast transcript
         # hears people talk.
@@ -1573,7 +2046,7 @@ class SessionManager:
         logger.warning(
             "the Live session "
             + (
-                f"has been 'thinking' for over {STUCK_THINKING_SECONDS:.0f}s"
+                f"has been '{session.agent_state}' without a sound for too long"
                 if stuck
                 else f"has not reported any speech for {DEAF_SECONDS:.0f}s while people talk"
             )
@@ -1795,6 +2268,8 @@ class SessionManager:
             agent=self.current_agent,
         )
 
+        self.start_limit_watch()
+
         # Initial state sync to web clients if meeting is active
         if self.current_config.meeting_config:
             self.gate.hold(OPENING_GRACE_SECONDS)
@@ -1816,18 +2291,31 @@ class SessionManager:
         # clicking "立即纠偏" / "推进议题" while the greeting is being spoken never
         # hits an unregistered method.
 
+        def on_config_stream(reader: rtc.TextStreamReader, identity: str):
+            self._spawn(self.receive_config(reader, identity))
+
+        ctx.room.register_text_stream_handler("pg.config", on_config_stream)
+
         # Register RPC method for config updates
         @ctx.room.local_participant.register_rpc_method("pg.updateConfig")
         async def update_config(data: rtc.rpc.RpcInvocationData):
-            logger.info(
-                f"update_config called by {data.caller_identity}: "
-                f"{redact_config_payload(data.payload)}"
-            )
             if self.current_session is None or data.caller_identity != participant.identity:
                 logger.info("update_config called by non-participant or no session")
                 return json.dumps({"changed": False})
 
-            new_config = parse_session_config(json.loads(data.payload))
+            payload = data.payload
+            config_key = (json.loads(payload) or {}).get("config_key")
+            if config_key:
+                payload = await self.take_config(config_key, data.caller_identity)
+                if payload is None:
+                    logger.warning(f"update_config: config {config_key} never arrived")
+                    return json.dumps({"changed": False, "error": "config_not_received"})
+            logger.info(
+                f"update_config called by {data.caller_identity}: "
+                f"{redact_config_payload(payload)}"
+            )
+
+            new_config = parse_session_config(json.loads(payload))
             # The browser only sends a key the user typed in; when the key lives
             # on the server the field is empty and must not wipe the one in use.
             new_config.gemini_api_key = (
@@ -1965,10 +2453,34 @@ class SessionManager:
                 logger.error(f"Error handling updateIntervention RPC: {err}")
                 return json.dumps({"success": False, "error": str(err)})
 
+        @ctx.room.local_participant.register_rpc_method("pg.endMeeting")
+        async def end_meeting_rpc(data: rtc.rpc.RpcInvocationData):
+            logger.info(f"pg.endMeeting called by {data.caller_identity}")
+
+            async def end_soon():
+                # the answer has to leave before the room is deleted
+                await asyncio.sleep(0.3)
+                await self.end_meeting("manual")
+
+            self._spawn(end_soon())
+            return json.dumps({"success": True})
+
+        @ctx.room.local_participant.register_rpc_method("pg.extendMeeting")
+        async def extend_meeting_rpc(data: rtc.rpc.RpcInvocationData):
+            logger.info(f"pg.extendMeeting called by {data.caller_identity}")
+            watch = self.limit_watch
+            if watch is None:
+                return json.dumps({"success": False, "error": "没有正在进行的会议"})
+            left = watch.extend(time.monotonic())
+            await self.publish_meeting_data({"type": "meeting_ending", "active": False})
+            return json.dumps({"success": True, "secondsLeft": int(left)})
+
         # Greet the user (RPC endpoints are live by this point, so a participant
         # clicking 立即纠偏 during the opening announcement is served correctly)
         self.cue_model(
-            OPENING_CUE_MEETING if self.current_config.meeting_config else OPENING_CUE_DEFAULT
+            OPENING_CUE_MEETING.format(first_words=self.first_words(0))
+            if self.current_config.meeting_config
+            else OPENING_CUE_DEFAULT
         )
 
     @utils.log_exceptions(logger=logger)

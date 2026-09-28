@@ -12,7 +12,8 @@ import { usePlaygroundState } from "./use-playground-state";
 import { VoiceId } from "@/data/voices";
 import { playgroundStateHelpers } from "@/lib/playground-state-helpers";
 
-export type ConnectFn = () => Promise<void>;
+/** state：用这份配置进入会议，而不是页面上当前的配置（刚改过、还没渲染出来时用） */
+export type ConnectFn = (state?: PlaygroundState) => Promise<void>;
 
 type TokenGeneratorData = {
   shouldConnect: boolean;
@@ -51,7 +52,9 @@ export const ConnectionProvider = ({
 
   const { pgState } = usePlaygroundState();
 
-  const connect = async () => {
+  const connect = async (state?: PlaygroundState) => {
+    // 按钮的 onClick 会把事件对象传进来，那不是配置
+    const use = state && "sessionConfig" in state ? state : pgState;
     if (!playgroundStateHelpers.hasGeminiKey(pgState)) {
       throw new Error("未配置 Gemini API 密钥");
     }
@@ -60,7 +63,7 @@ export const ConnectionProvider = ({
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(pgState),
+      body: JSON.stringify(use),
     });
 
     if (!response.ok) {
@@ -73,7 +76,7 @@ export const ConnectionProvider = ({
       wsUrl: url,
       token: accessToken,
       shouldConnect: true,
-      voice: pgState.sessionConfig.voice,
+      voice: use.sessionConfig.voice,
       roomName: roomName || `meeting-${Date.now()}`,
     });
   };

@@ -48,6 +48,7 @@ SAMPLE_RATE = 24000
 FRAME_SAMPLES = SAMPLE_RATE * 20 // 1000
 TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "").strip() or "gemini-3.8-flash-tts"
 TTS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
+HEAR_MODEL = "gemini-3.5-transcribe"
 
 T0 = time.time()
 events: list[dict] = []
@@ -99,6 +100,50 @@ def synthesize(voice: str, text: str) -> bytes:
         if w.getframerate() != SAMPLE_RATE or w.getnchannels() != 1:
             raise RuntimeError(f"unexpected clip format: {w.getframerate()} Hz")
         return w.readframes(w.getnframes())
+
+
+def hear(pcm: bytes, rate: int) -> str:
+    """What a listener hears in a piece of the moderator's audio. The text the
+    Live model reports is what it meant to say, which is not always the same:
+    it has been heard saying 总理 where its text said 总经理."""
+    wav = BytesIO()
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    response = httpx.post(
+        TTS_ENDPOINT,
+        headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
+        json={
+            "model": HEAR_MODEL,
+            "input": [
+                {
+                    "type": "audio",
+                    "data": base64.b64encode(wav.getvalue()).decode("ascii"),
+                    "mime_type": "audio/wav",
+                }
+            ],
+            "generation_config": {
+                "transcription_config": {
+                    "mode": {"type": "verbatim"},
+                    "language_codes": ["cmn-Hans-CN"],
+                }
+            },
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if body.get("output_text"):
+        return body["output_text"].strip()
+    texts = [
+        part.get("text", "")
+        for step in body.get("steps", [])
+        for part in step.get("content") or []
+        if part.get("type") == "text"
+    ]
+    return "".join(texts).strip()
 
 
 def compile_web_data() -> Path:
@@ -203,14 +248,34 @@ class Ear:
         self.last_loud = 0.0
         self.started_at = 0.0
         self.segments: list[tuple[float, float]] = []
+        #: what the moderator said, as sound: (start, seconds, pcm, rate)
+        self.recordings: list[tuple[float, float, bytes, int]] = []
 
     async def listen(self, track: rtc.Track):
+        # each track is recorded by itself: the moderator has two
+        tape = bytearray()
+        tape_from = 0.0
+        tape_loud = 0.0
         async for ev in rtc.AudioStream(track):
-            samples = array.array("h", bytes(ev.frame.data))
+            data = bytes(ev.frame.data)
+            samples = array.array("h", data)
             if not samples:
                 continue
             rms = math.sqrt(sum(s * s for s in samples) / len(samples))
             t = time.time()
+            if rms > 300:
+                if not tape:
+                    tape_from = t
+                tape_loud = t
+            if tape or rms > 300:
+                tape.extend(data)
+                if t - tape_loud > 0.7:
+                    seconds = tape_loud - tape_from
+                    if seconds >= 1.0:
+                        self.recordings.append(
+                            (tape_from - T0, seconds, bytes(tape), ev.frame.sample_rate)
+                        )
+                    tape = bytearray()
             if rms > 300:
                 self.last_loud = t
                 if not self.speaking:
@@ -242,6 +307,7 @@ class Meeting:
         self.tasks: list[asyncio.Task] = []
         self.steps: list[dict] = []
         self.answered = 0
+        self.heard: list[dict] = []
 
     # -- connection
 
@@ -484,6 +550,14 @@ class Meeting:
                 await self.floor_to_moderator()
             record["end"] = now()
 
+        # the closing summary is announced by the system, a moment later
+        asked = self.steps[-1]["start"] if self.steps else now()
+        for _ in range(200):
+            if "会议到此结束" in self.moderator_text_since(asked):
+                await self.wait_reply(min_wait=1.0)
+                break
+            await asyncio.sleep(0.1)
+
         await asyncio.sleep(3)
         await self.room.disconnect()
         for task in self.tasks:
@@ -642,6 +716,22 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
 
     check("短促杂音", None, f"{len(blips)} 次不足 1 秒的声音")
 
+    # what was said against what was meant
+    written = " ".join(
+        s["text"] for s in meeting.transcript.values() if s["role"] == "moderator"
+    )
+    heard = " ".join(h["text"] for h in meeting.heard)
+    terms = [t for t in meeting.scenario.get("pronounce", []) if t in written]
+    wrong = [t for t in terms if written.count(t) > heard.count(t)]
+    check(
+        "念出来的与文字一致",
+        (not wrong) if meeting.heard and terms else None,
+        "；".join(
+            f"「{t}」文字里 {written.count(t)} 次，听到 {heard.count(t)} 次" for t in terms
+        )
+        or "没有可核对的词",
+    )
+
     stuck = [e for e in events if e["kind"] == "wait_reply_timeout"]
     check("主持人没有卡住", not stuck, f"等待超时 {len(stuck)} 次")
 
@@ -729,6 +819,15 @@ async def main():
     await meeting.run()
     duration = now()
 
+    for start, seconds, pcm, rate in sorted(meeting.ear.recordings):
+        try:
+            text = await asyncio.to_thread(hear, pcm, rate)
+        except Exception as e:  # noqa: BLE001
+            text = ""
+            print(f"could not transcribe the moderator at {start:.0f}s: {e!r}")
+        meeting.heard.append({"t": round(start, 1), "seconds": round(seconds, 1), "text": text})
+        print(f"[{start:7.2f}] heard                {text}"[:240], flush=True)
+
     minutes = await asyncio.to_thread(fetch_minutes, args.web, meeting, started_at_ms)
     findings = analyse(meeting, minutes, duration)
 
@@ -742,6 +841,7 @@ async def main():
                 "steps": meeting.steps,
                 "decisions": list(meeting.decisions.values()),
                 "openItems": meeting.open_items,
+                "heard": meeting.heard,
                 "minutes": minutes,
                 "events": events,
             },

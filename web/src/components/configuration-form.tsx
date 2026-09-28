@@ -148,14 +148,27 @@ export function ConfigurationForm() {
     console.log("has changes, sending RPC");
 
     try {
+      // 配置本身走文本流，RPC 里只带它的编号：RPC 的请求体上限是 15 KB，
+      // 而主持人的系统指令就有约 13 KB，整份配置放进 RPC 会被直接拒绝。
+      const configKey = crypto.randomUUID();
+      await localParticipant.sendText(JSON.stringify(attributes), {
+        topic: "pg.config",
+        destinationIdentities: [agent.identity],
+        attributes: { key: configKey },
+      });
       let response = await localParticipant.performRpc({
         destinationIdentity: agent.identity,
         method: "pg.updateConfig",
-        payload: JSON.stringify(attributes),
+        payload: JSON.stringify({ config_key: configKey }),
+        // 改了模型或指令时 agent 要重建会话，比默认的等待时间长
+        responseTimeout: 30000,
       });
       console.log("pg.updateConfig", response);
-      lastSentRef.current = attributes;
       let responseObj = JSON.parse(response);
+      if (responseObj.error) {
+        throw new Error(responseObj.error);
+      }
+      lastSentRef.current = attributes;
       // 只改了介入设置时 agent 原地生效（restarted=false），那条提示由看板给出
       if (responseObj.changed && responseObj.restarted !== false) {
         toast({
@@ -164,6 +177,7 @@ export function ConfigurationForm() {
         });
       }
     } catch (e) {
+      console.error("pg.updateConfig failed", e);
       toast({
         title: "更新配置出错",
         description: "更新配置时发生错误，请重试。",

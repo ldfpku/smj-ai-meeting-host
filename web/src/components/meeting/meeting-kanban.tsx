@@ -40,6 +40,7 @@ import {
   ArrowUpCircle,
   Sparkles,
   Radar,
+  Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -47,6 +48,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useRoomContext } from "@livekit/components-react";
 import { useAgent } from "@/hooks/use-agent";
+import { useConnection } from "@/hooks/use-connection";
 
 interface MeetingKanbanProps {
   config: MeetingConfig;
@@ -69,7 +71,20 @@ export function MeetingKanban({
   const room = useRoomContext();
   const { agent, transcript } = useAgent();
   const { dispatch } = usePlaygroundState();
+  const { disconnect } = useConnection();
   const [showMinutesDialog, setShowMinutesDialog] = useState(false);
+  // 「结束会议」要点两次：第一次只是进入待确认状态，几秒后自动复原
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
+
+  useEffect(() => {
+    if (!confirmingEnd) return;
+    const timer = setTimeout(() => setConfirmingEnd(false), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmingEnd]);
+
+  useEffect(() => {
+    if (!isConnectingOrConnected) setConfirmingEnd(false);
+  }, [isConnectingOrConnected]);
 
   // Local seconds counter for smooth visual countdown
   const [localSeconds, setLocalSeconds] = useState(liveState.elapsedSeconds || 0);
@@ -162,6 +177,34 @@ export function MeetingKanban({
     toast({
       title: `已推进到议题 ${nextIdx + 1}`,
       description: `当前议题：${config.agendas[nextIdx].title}`,
+    });
+  };
+
+  const handleEndMeeting = async () => {
+    if (!confirmingEnd) {
+      setConfirmingEnd(true);
+      return;
+    }
+    setConfirmingEnd(false);
+    // 让 agent 关闭房间并停止各项模型调用。它没有回应时也要断开：
+    // 浏览器离开后 agent 会在 20 秒内自行结束。
+    if (room?.localParticipant && agent?.identity) {
+      try {
+        await room.localParticipant.performRpc({
+          destinationIdentity: agent.identity,
+          method: "pg.endMeeting",
+          payload: "{}",
+        });
+        // 「会议已结束」的提示随 agent 的 meeting_ended 消息给出
+        return;
+      } catch (err) {
+        console.error("pg.endMeeting RPC failed", err);
+      }
+    }
+    await disconnect();
+    toast({
+      title: "会议已结束",
+      description: "连接已断开。转写和决议已保存在本机，可继续生成纪要。",
     });
   };
 
@@ -314,6 +357,18 @@ export function MeetingKanban({
             <Sparkles className="w-3.5 h-3.5" />
             AI 纪要
           </Button>
+          {isConnectingOrConnected && (
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={handleEndMeeting}
+              className="h-8 gap-1 text-xs"
+              title="结束会议：断开连接并关闭房间，之后不再产生模型和通话费用"
+            >
+              <Square className="w-3 h-3 fill-current" />
+              {confirmingEnd ? "再点一次确认" : "结束会议"}
+            </Button>
+          )}
         </div>
       </div>
 

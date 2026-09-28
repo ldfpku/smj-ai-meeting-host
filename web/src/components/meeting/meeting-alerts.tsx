@@ -2,7 +2,15 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useVoiceAssistant } from "@livekit/components-react";
-import { AlertTriangle, Clock, History, Undo2, Zap } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  History,
+  Hourglass,
+  Undo2,
+  Zap,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAgent } from "@/hooks/use-agent";
 import { useAgentRpc } from "@/hooks/use-agent-rpc";
@@ -52,7 +60,8 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
   const { agent, audioTrack, state: agentState } = useVoiceAssistant();
   const callAgent = useAgentRpc();
   const { toast } = useToast();
-  const { driftAlert, driftSuggestion, overtimeAlert } = meetingLiveState;
+  const { driftAlert, driftSuggestion, overtimeAlert, ending, endedMessage } =
+    meetingLiveState;
 
   const [, forceTick] = useState(0);
   const mutedUntilRef = useRef(0);
@@ -78,6 +87,8 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
       driftAlert ? driftAlert.at + DRIFT_ALERT_TTL_MS : 0,
       driftSuggestion ? driftSuggestion.expiresAt : 0,
       overtimeAlert ? overtimeAlert.at + OVERTIME_ALERT_TTL_MS : 0,
+      // 自动结束的倒计时每秒刷新
+      ending ? ending.endsAt : 0,
     ].filter(Boolean);
     if (deadlines.length === 0) return;
 
@@ -98,7 +109,7 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
     }, 1000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driftAlert, driftSuggestion, overtimeAlert]);
+  }, [driftAlert, driftSuggestion, overtimeAlert, ending]);
 
   // 撤销后的本地静音：主持人说完这一轮（或超时）就恢复
   useEffect(() => {
@@ -166,6 +177,21 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
     await callAgent("pg.undoIntervene", { dismissed: true });
   };
 
+  const handleKeepOpen = async () => {
+    if (!ending) return;
+    const reason = ending.reason;
+    const result = await callAgent("pg.extendMeeting");
+    if (!result?.success) return;
+    updateMeetingLiveState({ ending: null });
+    toast({
+      title: reason === "limit" ? "会议已延长 30 分钟" : "会议继续",
+      description:
+        reason === "limit"
+          ? "到时仍会提前提醒。"
+          : "之后若再次长时间无人发言，仍会自动结束。",
+    });
+  };
+
   const handleForceIntervene = async () => {
     playAttentionChime();
     const result = await callAgent("pg.forceIntervene", {
@@ -183,10 +209,58 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
     !!previousSession &&
     !driftAlert &&
     !driftSuggestion &&
+    !endedMessage &&
     agentState === "disconnected";
+
+  const secondsLeft = ending
+    ? Math.max(0, Math.round((ending.endsAt - Date.now()) / 1000))
+    : 0;
 
   return (
     <>
+      {ending && (
+        <div
+          role="alert"
+          className="w-full py-2 px-3 sm:px-4 bg-red-500/10 border border-red-500/40 rounded-lg flex flex-wrap items-center justify-between gap-2 text-red-700 dark:text-red-400 text-xs shadow-sm"
+        >
+          <span className="flex items-center gap-1.5 font-semibold min-w-0">
+            <Hourglass className="w-3.5 h-3.5 flex-shrink-0" />
+            {ending.reason === "idle"
+              ? "长时间无人发言，会议即将自动结束"
+              : "会议已接近时长上限，即将自动结束"}
+            <span className="tabular-nums font-normal">
+              （还有 {Math.floor(secondsLeft / 60)}:
+              {(secondsLeft % 60).toString().padStart(2, "0")}）
+            </span>
+          </span>
+          <Button
+            size="sm"
+            className="h-6 px-2.5 text-xs bg-red-600 hover:bg-red-700 text-white font-medium"
+            onClick={handleKeepOpen}
+          >
+            {ending.reason === "idle" ? "继续开会" : "延长 30 分钟"}
+          </Button>
+        </div>
+      )}
+
+      {endedMessage && agentState === "disconnected" && (
+        <div className="w-full py-2 px-3 sm:px-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex flex-wrap items-center justify-between gap-2 text-emerald-700 dark:text-emerald-400 text-xs shadow-sm">
+          <span className="flex items-center gap-1.5 font-semibold min-w-0">
+            <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+            {endedMessage}
+            <span className="font-normal">
+              连接已断开，不再产生费用。可在看板右上角生成纪要。
+            </span>
+          </span>
+          <button
+            onClick={() => updateMeetingLiveState({ endedMessage: null })}
+            className="underline hover:opacity-80 text-muted-foreground text-xs"
+          >
+            关闭
+          </button>
+        </div>
+      )}
+
       {driftAlert && (
         <div
           role="alert"

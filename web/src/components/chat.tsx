@@ -26,6 +26,10 @@ import {
 import { defaultMeetingConfig } from "@/data/meeting";
 import { meetingStore } from "@/lib/meeting-store";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
+import { useDemo } from "@/hooks/use-demo";
+import { DemoPanel } from "@/components/demo/demo-panel";
+import { Button } from "@/components/ui/button";
+import { Clapperboard } from "lucide-react";
 
 export function Chat() {
   const connectionState = useConnectionState();
@@ -40,6 +44,7 @@ export function Chat() {
   } = useAgent();
   const { disconnect } = useConnection();
   const { pgState } = usePlaygroundState();
+  const demo = useDemo();
   const [isEditingInstructions, setIsEditingInstructions] = useState(false);
   const [showMeetingConfigModal, setShowMeetingConfigModal] = useState(false);
   const [showPreviousMinutes, setShowPreviousMinutes] = useState(false);
@@ -116,7 +121,7 @@ export function Chat() {
 
   // 会议模式下左栏还要放转写面板，可视化区域收矮一些
   const renderMeetingVisualizer = () => (
-    <div className="h-[200px] xl:h-[240px] w-full">
+    <div className="h-[140px] xl:h-[170px] w-full">
       <SmjarVisualizer
         key={audioTrack?.publication?.trackSid || 'no-track'}
         agentState={state}
@@ -147,7 +152,24 @@ export function Chat() {
         exit={{ opacity: 0, y: 10 }}
         transition={{ type: "tween", duration: 0.15, ease: "easeInOut" }}
       >
-        {isChatRunning ? <SessionControls /> : <ConnectButton />}
+        {demo.status !== "idle" && demo.status !== "done" ? null : isChatRunning ? (
+          <SessionControls />
+        ) : (
+          <div className="flex items-center gap-2">
+            <ConnectButton />
+            {isMeetingPreset && (
+              <Button
+                variant="outline"
+                className="text-sm font-semibold h-9 gap-2"
+                onClick={demo.start}
+                title="由合成语音扮演四位参会人，自动开一场约 4 分钟的会，演示主持人的全部功能"
+              >
+                <Clapperboard className="h-4 w-4" />
+                演示会议
+              </Button>
+            )}
+          </div>
+        )}
       </motion.div>
     </AnimatePresence>
   );
@@ -159,8 +181,11 @@ export function Chat() {
         isEditingInstructions={isEditingInstructions}
         onToggleEdit={toggleInstructionsEdit}
       />
-      <div className="flex flex-col flex-grow items-center lg:justify-between mt-12 lg:mt-0 min-w-0 w-full">
-        <div className="w-full h-full flex flex-col min-w-0 gap-4">
+      {/* min-h-0 all the way down: without it a long transcript makes these
+          boxes as tall as their content, the page clips them, and the
+          transcript can neither scroll nor show its newest line */}
+      <div className="flex flex-col flex-1 min-h-0 items-center lg:justify-between mt-12 lg:mt-0 min-w-0 w-full">
+        <div className="w-full flex-1 min-h-0 flex flex-col min-w-0 gap-4">
           {/* 跑题打断 / 半自动建议 / 议题超时 / 上一场会议记录 */}
           {isMeetingPreset && (
             <MeetingAlerts
@@ -172,8 +197,12 @@ export function Chat() {
           {isMeetingPreset ? (
             <>
               {/* Mobile: 纵向堆叠 */}
-              <div className="lg:hidden w-full min-w-0 flex flex-col gap-4 overflow-y-auto">
-                <Instructions />
+              <div className="lg:hidden w-full min-w-0 min-h-0 flex-1 flex flex-col gap-4 overflow-y-auto [&>*]:flex-shrink-0">
+                {demo.status === "idle" ? (
+                  <Instructions />
+                ) : (
+                  <DemoPanel className="h-[260px] flex-shrink-0" />
+                )}
                 {renderVisualizer()}
                 <TranscriptPanel
                   transcript={transcript}
@@ -211,11 +240,15 @@ export function Chat() {
               </div>
 
               {/* Desktop: 左右双栏布局 */}
-              <div className="hidden lg:grid lg:grid-cols-12 lg:gap-4 lg:h-full lg:min-w-0 w-full overflow-hidden">
+              <div className="hidden lg:grid lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)] lg:gap-4 lg:flex-1 lg:min-h-0 lg:min-w-0 w-full overflow-hidden">
                 <div className="lg:col-span-5 flex flex-col h-full min-h-0 min-w-0 gap-3">
-                  <div className="flex items-center justify-center w-full min-w-0">
-                    <Instructions />
-                  </div>
+                  {demo.status === "idle" ? (
+                    <div className="flex items-center justify-center w-full min-w-0">
+                      <Instructions />
+                    </div>
+                  ) : (
+                    <DemoPanel className="h-[300px] flex-shrink-0" />
+                  )}
                   <div className="flex-shrink-0 flex items-center justify-center min-w-0">
                     <div className="w-full min-w-0">
                       {!isEditingInstructions && renderMeetingVisualizer()}
@@ -280,7 +313,7 @@ export function Chat() {
           )}
         </div>
 
-        <div className="my-4">{renderConnectionControl()}</div>
+        <div className="my-4 flex-shrink-0">{renderConnectionControl()}</div>
       </div>
 
       <MeetingConfigModal

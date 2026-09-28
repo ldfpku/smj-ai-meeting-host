@@ -78,6 +78,14 @@ class SpokenClips:
     def get(self, text: str) -> Clip | None:
         return self._clips.get(text)
 
+    async def wait(self, text: str, timeout: float) -> Clip | None:
+        """The clip for a sentence that was not known ahead of time."""
+        self.prepare([text])
+        task = self._tasks.get(text)
+        if task is not None:
+            await asyncio.wait([task], timeout=timeout)
+        return self._clips.get(text)
+
     async def aclose(self) -> None:
         tasks, self._tasks = list(self._tasks.values()), {}
         for task in tasks:

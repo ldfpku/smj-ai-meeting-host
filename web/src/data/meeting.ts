@@ -9,6 +9,8 @@ export interface AgendaItem {
   title: string;
   durationMinutes: number;
   goal: string;
+  /** 汇报人：议题开始时主持人请谁先介绍情况（姓名或岗位） */
+  presenter?: string;
   /** 24 小时书面前置材料索引 */
   preReadRef?: string;
   /** 关联业务流程编号（M-01…H-06） */
@@ -166,6 +168,18 @@ export interface MeetingLiveState {
   intervention: InterventionSettings;
   /** agent 是否配置了 JEV_API_KEY 并启动了偏题检测 */
   detectorActive: boolean;
+  /** 会议即将自动结束（无人发言，或超过时长上限） */
+  ending: MeetingEnding | null;
+  /** 会议已结束时的说明 */
+  endedMessage: string | null;
+}
+
+export interface MeetingEnding {
+  /** idle：长时间无人发言；limit：达到时长上限 */
+  reason: "idle" | "limit";
+  message: string;
+  /** 预计自动结束的时刻（本机时间，毫秒） */
+  endsAt: number;
 }
 
 /** 决议四要素：责任人 / 完成时限 / 验证方式 / 关闭证据 */
@@ -243,6 +257,7 @@ function buildAgendaSection(config: MeetingConfig): string {
       const bits = [
         `  ${i + 1}. 【${a.title}】 (用时: ${a.durationMinutes}分钟) -> 目标: ${a.goal}`,
       ];
+      if (a.presenter?.trim()) bits.push(`     汇报人: ${a.presenter.trim()}`);
       if (a.processId) bits.push(`     关联流程: ${a.processId}`);
       if (a.preReadRef) bits.push(`     前置材料: ${a.preReadRef}`);
       return bits.join("\n");
@@ -275,6 +290,7 @@ function buildRollCallRule(config: MeetingConfig): string {
   return `【点名发言：沉默不等于同意 (request_speaker)】：
    - 本公司参会人普遍不会主动表态，**沉默绝不等于同意**。
    - 每一项议题在收尾前，你必须点名征询名单中标记【必须发言】、但本议题尚未表态的人。
+   - 征询表态要等议题有了结论或方案之后。议题刚开始、还没人发言时没有可以表态的内容，这时不要征询表态。
    - **一次点完**：调用一次 \`request_speaker\`，把还没表态的人都传进去（attendee_names），前台看板会高亮这些人。不要一人调用一次。
    - 点名时照工具返回的原话说，不要自己加问题。
    - **所有【必须发言】人员都点到之前，不得推进到下一议题。**
@@ -315,20 +331,26 @@ export function generateMeetingInstructions(config: MeetingConfig): string {
    - 你还会收到以【打断指令】开头的系统指令：那是偏题检测系统或人类主持人已经决定打断。收到后照指令里的原话说，不要再调用 \`warn_topic_drift\`。
    - 打断时用大家平时说话的词，语气平稳、坚定，不要训人。`,
 
+    `【请人先发言 (request_speaker，purpose 填 report)】：
+   - 每项议题开始时要有人先介绍情况。议程里写了汇报人的，请汇报人先讲；没写的，请与该议题最相关的那一位先讲。
+   - 有人要求你指定发言人，或议题开始后十几秒没人说话时：调用 \`request_speaker\`，purpose 填 report，attendee_names 只填一位，然后照工具返回的原话说。
+   - 这不是征询表态，不要问"同意还是有不同意见"。`,
+
     rollCallRule,
 
     `【促成完整决议：四要素缺一不可 (record_decision)】：
    - 本公司要求每一条决议都必须同时具备**四要素**：**责任人 / 完成时限 / 验证方式 / 关闭证据**。
-   - 议题临近收尾时，主动逐项追问，直到四要素齐全：
-     "这条最终敲定的方案是什么？由谁负责？什么时候完成？**用什么方式验证做到了？拿什么作为关闭证据？**"
+   - 有人提出了方案但四要素不全时，等他说完就开口追问，只问缺的那几项，一句话问完。例如只说了责任人："完成时限、验证方式和关闭证据分别是什么？"
+   - 议题临近收尾时还没有结论的，主动追问："这条最终敲定的方案是什么？由谁负责？什么时候完成？**用什么方式验证做到了？拿什么作为关闭证据？**"
    - 四要素齐全后立即调用 \`record_decision\` 记录，然后照工具返回的原话向全场确认，不要把四要素再念一遍（看板上有）。
+   - **四要素只能记会上有人说出来的内容**。没人说过的要素不要自己编，当场追问；完成时限要是具体的日期或时间点。
    - **若追问两轮仍凑不齐四要素，不要勉强记成决议**——改用 \`record_open_item\` 记为未决事项。
    - 尽量同时判断该决议的归口部门与关联流程编号（见文末参考资料），一并传入。`,
 
     `【未决即升级 (record_open_item)】：
    - 凡是会上没能形成结论的事项——争执不下、缺数据、缺人、跨部门扯皮——都必须落成未决事项，绝不能不了了之。
    - 调用 \`record_open_item\` 传入：事项、未决原因、跟进责任人、升级路径（默认：${escalation}）。
-   - 口头明确宣布："这条今天定不了，记为未决事项，由【某某】跟进，升级到【${escalation}】。"`,
+   - 登记后照工具返回的原话宣布，不要自己组织句子。`,
 
     `【推进议程 (advance_agenda)】：
    - 当参会人明确表示当前议题已完成，或当前议题已有结论且必须发言的人都已表态时，调用 \`advance_agenda\` 传入目标议程索引与简要总结，然后照工具返回的原话宣布。
@@ -372,7 +394,9 @@ ${rulesText}
 ## 语气与开场要求
 - **开场**：清晰简短地播报会议名称、总时长与各项议题${config.requirePreRead ? "，并确认前置材料阅读情况" : ""}，宣布讨论正式开始。
 - **打断时**：语气平稳、坚定，只说指令或工具给出的那两句话，说完马上把发言权交还给参会人。
-- **收尾**：会议结束前主动汇报：已形成几条决议、其中几条四要素齐全、还有几条未决事项及其升级路径。
+- **念清楚**：语速不要快，每个字都念出来。岗位和部门名称不要缩略，例如「总经理」三个字要念全，不能念成「总理」。
+- **收尾**：有人要求总结或结束会议时，或最后一项议题谈完时，调用 \`summarize_meeting\`。总结由系统向全场宣布，你不要自己口头总结。
+- 你还会收到以【系统通知】开头的指令（例如会议即将自动结束）：照指令里的原话说。
 
 ---
 

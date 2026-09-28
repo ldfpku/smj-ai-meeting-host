@@ -1,6 +1,7 @@
 import "./globals.css";
 import { PlaygroundStateProvider } from "@/hooks/use-playground-state";
 import { ConnectionProvider } from "@/hooks/use-connection";
+import { DemoProvider } from "@/hooks/use-demo";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toaster";
 import { PHProvider } from "@/hooks/posthog-provider";
@@ -43,6 +44,7 @@ export default function RootLayout({
             <PlaygroundStateProvider>
               <ConnectionProvider>
                 <TooltipProvider>
+                  <DemoProvider>
                   <RoomWrapper>
                     <SidebarProvider defaultOpen={true}>
                       <Sidebar className="bg-bg1">
@@ -63,6 +65,7 @@ export default function RootLayout({
                       </SidebarInset>
                     </SidebarProvider>
                   </RoomWrapper>
+                  </DemoProvider>
                 </TooltipProvider>
               </ConnectionProvider>
             </PlaygroundStateProvider>
