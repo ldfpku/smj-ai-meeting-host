@@ -86,8 +86,10 @@
   --radius-xl: calc(var(--radius) + 4px);
   
   /* Fonts */
-  --font-sans: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "Commit Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  /* BIS B15 / B16：西文与数字 Barlow，中文思源黑体，缺字体时用微软雅黑 / 苹方 */
+  --font-sans: var(--font-barlow), var(--font-noto-sc), "Source Han Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  --font-display: var(--font-barlow-condensed), var(--font-noto-sc), "Source Han Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), var(--font-noto-sc), "Microsoft YaHei", "PingFang SC", "Commit Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 :root {
@@ -236,7 +238,18 @@
   
   body {
     @apply bg-background text-foreground;
-    font-family: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-sans);
+    /* 中文正文行距 1.6–1.8 倍（BIS B16）；带 text-* 的元素有自己的行高 */
+    line-height: 1.6;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+  }
+
+  /* 不用斜体（BIS B16） */
+  em, i, cite, address {
+    font-style: normal;
   }
 
   /* Webkit scrollbar styling */
