@@ -8,7 +8,7 @@ const buttonVariants = cva(
   [
     "group relative inline-flex items-center justify-center gap-1 whitespace-nowrap cursor-pointer",
     "rounded border font-sans transition-all",
-    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
     "active:scale-[99%]",
     "disabled:pointer-events-none disabled:opacity-60",
   ],
@@ -16,7 +16,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "border-none bg-fgAccent1 text-primary-foreground hover:bg-fgAccent2 active:bg-fgAccent2 disabled:bg-muted",
+          "border-none bg-brand-blue text-white hover:brightness-110 active:brightness-95 disabled:bg-muted disabled:text-muted-foreground",
         secondary:
           "border-border bg-bg2 text-fg1 hover:border-border hover:bg-bg3 active:bg-background",
         outline:

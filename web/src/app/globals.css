@@ -4,12 +4,11 @@
 
 @theme inline {
   /* Gemini-specific colors */
-  --color-gemini-blue: #5282ed;
 
-  /* SMJAR 品牌色（取自 logo，见 public/static/brand/README） */
-  --color-brand-green: #1F7A3C;
-  --color-brand-green-dark: #0A3A1B;
-  --color-brand-green-light: #58B96C;
+  /* SMJ 品牌色（BIS B12，见 public/static/brand/README）：
+     斯米伽蓝是标志与界面主色，深井蓝是正文与深色底，信号橙只属于标志上钩（标志文件里直接用，不做界面色令牌），不做文字 */
+  --color-brand-blue: #034FBC;
+  --color-brand-navy: #0A1F54;
 
   /* 品牌化表面：随主题切换，用于系统指令面板与标识动画衬底 */
   --color-brand-surface: var(--brand-surface);
@@ -94,63 +93,63 @@
 :root {
   --radius: 0.625rem;
 
-  /* 品牌化表面（浅色）：极浅绿底 + 绿灰描边，与 logo 同色系 */
-  --brand-surface: #F3F8F4;
-  --brand-border: #D7E8DD;
-  --brand-fg: #1B3A28;
-  --brand-glow: rgba(31, 122, 60, 0.10);
+  /* 品牌化表面（浅色）：钢白底 + 浅蓝描边（BIS B13） */
+  --brand-surface: #E9EDF5;
+  --brand-border: #D2DFF6;
+  --brand-fg: #0A1F54;
+  --brand-glow: rgba(3, 79, 188, 0.10);
 
   /* Light theme */
   --background: oklch(1 0 0);
   --bg0: #FFFFFF;
-  --bg-1: #FDFDFC;
-  --bg-2: #EFEFEC;
-  --bg-3: #E2E2DF;
+  --bg-1: #FBFCFE;
+  --bg-2: #EEF1F7;
+  --bg-3: #E1E7F1;
   --bg-serious-1: #FAE6E6;
   --bg-serious-2: #FFCDC7;
-  --foreground: #000000;
-  --fg-0: #000000;
-  --fg-1: #3B3B3B;
-  --fg-2: #4D4D4D;
-  --fg-3: #636363;
-  --fg-4: #707070;
-  --fg-5: #666666;
-  --fg-accent-2: #395CF9;
+  --foreground: #0A1F54;
+  --fg-0: #0A1F54;
+  --fg-1: #2B3752;
+  --fg-2: #3A4562;
+  --fg-3: #636C7E;
+  --fg-4: #6B7487;
+  --fg-5: #666F82;
+  --fg-accent-2: #4170CB;
   --fg-serious-1: #B32909;
   --fg-serious-2: #FA4C39;
-  --separator1: #DBDBD8;
-  --separator2: #BDBDBB;
+  --separator1: #DDE3EE;
+  --separator2: #B7BECB;
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: #0A1F54;
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: #0A1F54;
+  --primary: #034FBC;
+  --primary-foreground: #FFFFFF;
+  --secondary: #E9EDF5;
+  --secondary-foreground: #0A1F54;
+  --muted: #E9EDF5;
+  --muted-foreground: #636C7E;
+  --accent: #E9EDF5;
+  --accent-foreground: #0A1F54;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: #DBDBD8;
-  --border-intense: #BDBDBB;
-  --input: oklch(0.922 0 0);
-  --ring: #002CF2;
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-  --fg-accent-primary: #002CF2;
+  --border: #DDE3EE;
+  --border-intense: #B7BECB;
+  --input: #D2DFF6;
+  --ring: #034FBC;
+  --chart-1: #034FBC;
+  --chart-2: #4170CB;
+  --chart-3: #0A1F54;
+  --chart-4: #636C7E;
+  --chart-5: #B7BECB;
+  --sidebar: #FBFCFE;
+  --sidebar-foreground: #0A1F54;
+  --sidebar-primary: #034FBC;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #E9EDF5;
+  --sidebar-accent-foreground: #0A1F54;
+  --sidebar-border: #DDE3EE;
+  --sidebar-ring: #034FBC;
+  --fg-accent-primary: #034FBC;
   
   /* LiveKit-specific variables */
   --lk-va-bar-width: 2px;
@@ -159,63 +158,75 @@
 }
 
 .dark {
-  /* 品牌化表面（深色）：深绿黑底，比纯黑更贴合品牌 */
-  --brand-surface: #0B1D13;
-  --brand-border: #1C4630;
-  --brand-fg: #CBE5D5;
-  --brand-glow: rgba(88, 185, 108, 0.14);
+  /* 品牌化表面（深色）：深井蓝系，比纯黑更贴合品牌 */
+  --brand-surface: #0B1736;
+  --brand-border: #2B3752;
+  --brand-fg: #D2DFF6;
+  --brand-glow: rgba(65, 112, 203, 0.16);
 
   /* Dark theme */
-  --background: oklch(0.145 0 0);
-  --bg0: #000000;
-  --bg-1: #070707;
-  --bg-2: #131313;
-  --bg-3: #1F1F1F;
+  --background: #060E26;
+  --bg0: #030818;
+  --bg-1: #060E26;
+  --bg-2: #0D1A3D;
+  --bg-3: #16264F;
   --bg-serious-1: #1F0E0B;
   --bg-serious-2: #421510;
-  --foreground: oklch(0.985 0 0);
+  --foreground: #F4F7FC;
   --fg-0: #FFFFFF;
-  --fg-1: #CCCCCC;
-  --fg-2: #B2B2B2;
-  --fg-3: #999999;
-  --fg-4: #666666;
-  --fg-5: #555555;
-  --fg-accent-2: #15889F;
+  --fg-1: #D9E2F3;
+  --fg-2: #B7BECB;
+  --fg-3: #8E99AF;
+  --fg-4: #6C7890;
+  --fg-5: #556078;
+  --fg-accent-2: #6F93DB;
   --fg-serious-1: #FF7566;
   --fg-serious-2: #791B11;
-  --separator1: #202020;
-  --separator2: #30302F;
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --separator1: #16224A;
+  --separator2: #2B3752;
+  --card: #0B1736;
+  --card-foreground: #F4F7FC;
+  --popover: #0B1736;
+  --popover-foreground: #F4F7FC;
+  --primary: #4170CB;
+  --primary-foreground: #FFFFFF;
+  --secondary: #16264F;
+  --secondary-foreground: #F4F7FC;
+  --muted: #16264F;
+  --muted-foreground: #8E99AF;
+  --accent: #16264F;
+  --accent-foreground: #F4F7FC;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: #202020;
-  --border-intense: #30302F;
+  --border: #1B2A55;
+  --border-intense: #2B3752;
   --input: oklch(1 0 0 / 15%);
-  --ring: #1FD5F9;
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: #070707;
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-  --fg-accent-primary: #1FD5F9;
+  --ring: #4170CB;
+  --chart-1: #4170CB;
+  --chart-2: #D2DFF6;
+  --chart-3: #FA8C1F;
+  --chart-4: #8E99AF;
+  --chart-5: #034FBC;
+  --sidebar: #060E26;
+  --sidebar-foreground: #F4F7FC;
+  --sidebar-primary: #4170CB;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #16264F;
+  --sidebar-accent-foreground: #F4F7FC;
+  --sidebar-border: #1B2A55;
+  --sidebar-ring: #4170CB;
+  --fg-accent-primary: #4170CB;
+}
+
+/* 标志在连接中轻轻上下浮动；只平移，不旋转（BIS B11） */
+@keyframes smj-mark-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.smj-mark-float {
+  animation: smj-mark-float 3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .smj-mark-float { animation: none; }
 }
 
 @layer base {

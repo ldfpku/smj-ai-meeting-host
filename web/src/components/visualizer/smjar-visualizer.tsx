@@ -1,8 +1,6 @@
 "use client";
 
-import Image from "next/image";
 import { SmjarMark } from "@/components/visualizer/smjar-mark";
-import { useTheme } from "next-themes";
 
 import {
   AgentState,
@@ -20,92 +18,25 @@ export function SmjarVisualizer({
   agentState,
 }: SmjarVisualizerProps) {
   const agentVolume = useTrackVolume(agentTrackRef);
-  const { theme, resolvedTheme } = useTheme();
-  const currentTheme = theme === "system" ? resolvedTheme : theme;
+  const disconnected = agentState === "disconnected";
+  const volume = Math.min(agentVolume, 1);
 
   return (
-    <div
-      className="flex h-full w-full items-center justify-center relative"
-      style={{
-        perspective: "1000px",
-      }}
-    >
-      {/* 品牌辉光衬底：让地球落在同色系的光晕里，而不是浮在纯色背景上 */}
+    <div className="flex h-full w-full items-center justify-center relative">
+      {/* 斯米伽蓝光晕衬在标志背后：主持人说话时随音量变亮、变大，未连接时熄灭。
+          光晕只在标志后面，标志本身不加光、不加影（BIS B11）。 */}
       <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
         <div
-          className="h-[340px] w-[340px] rounded-full"
+          className="h-[340px] w-[340px] rounded-full transition-all duration-150"
           style={{
             background:
               "radial-gradient(circle, var(--brand-glow) 0%, transparent 70%)",
+            opacity: disconnected ? 0.35 : 0.65 + volume * 0.35,
+            transform: `scale(${disconnected ? 0.8 : 0.9 + volume * 0.3})`,
           }}
         />
       </div>
-
-      {/* 背景水印：品牌水印图（透明底、低不透明度，专为平铺/衬底设计） */}
-      <div className="absolute z-0 left-1/2 top-1/4 -translate-x-1/2 -translate-y-10 opacity-[0.06] pointer-events-none">
-        <Image
-          src="/static/brand/smj-symbol-blue.svg"
-          alt=""
-          aria-hidden
-          width={140}
-          height={160}
-          unoptimized
-          className="h-40 w-auto object-contain dark:hidden"
-        />
-        <Image
-          src="/static/brand/smj-symbol-white.svg"
-          alt=""
-          aria-hidden
-          width={140}
-          height={160}
-          unoptimized
-          className="hidden h-40 w-auto object-contain dark:block"
-        />
-      </div>
-      <SmjarMark volume={agentVolume} state={agentState} />
-      <Shadow volume={agentVolume} state={agentState} theme={currentTheme} />
+      <SmjarMark volume={volume} state={agentState} />
     </div>
   );
 }
-
-const Shadow = ({
-  volume,
-  state,
-  theme,
-}: {
-  volume: number;
-  state?: AgentState;
-  theme?: string;
-}) => {
-  const disconnectedOpacity = theme === "light" ? 0.15 : 0.2;
-  const idleOpacity = theme === "light" ? 0.12 : 0.15;
-
-  return (
-    <div
-      className="absolute z-0"
-      style={{
-        transform: "translateY(140px) rotate3d(1, 0, 0, 80deg)",
-        transformStyle: "preserve-3d",
-        zIndex: -1,
-      }}
-    >
-      <div
-        className="absolute w-[200px] h-[100px] transition-all duration-150 left-1/2 top-1/2 rounded-full bg-brand-green"
-        style={{
-          transform: `translate(-50%, calc(-50% + 50px)) scale(${
-            state === "disconnected" ? 0.6 : 0.75 + volume * 0.1
-          })`,
-          filter: `blur(30px) ${
-            state === "disconnected" ? "saturate(0.3)" : "saturate(1.0)"
-          }`,
-          opacity:
-            state === "disconnected"
-              ? disconnectedOpacity
-              : volume > 0
-              ? 0.4
-              : idleOpacity,
-        }}
-      ></div>
-    </div>
-  );
-};

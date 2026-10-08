@@ -271,7 +271,7 @@ bash scripts/cf-deploy.sh
 ```
 
 不要直接用 `pnpm exec wrangler deploy`：本机日常的 `wrangler login` 可能是别的账号（DF）。
-`cf-deploy.sh` 把 ZY 的登录放在单独的目录（默认 `~/.wrangler-profiles/smj-meeting`，
+`cf-deploy.sh` 把 ZY 的登录放在单独的目录（默认 `~/.cloudflared-zy/wrangler-home`，
 可用 `WRANGLER_PROFILE_DIR` 改），首次运行会打开浏览器，选 ZY 账号并允许；
 账号不是 `wrangler.jsonc` 里锁定的那个时会拒绝发布。
 

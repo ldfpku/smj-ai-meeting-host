@@ -118,7 +118,7 @@ export function AuthDialog({
                     <Link
                       href="https://aistudio.google.com/app/apikey"
                       target="_blank"
-                      className="underline text-gemini-blue"
+                      className="underline text-fgAccent1"
                       onClick={(e) => e.stopPropagation()}
                     >
                       Gemini API 密钥
@@ -138,7 +138,7 @@ export function AuthDialog({
                           <Link
                             href="https://aistudio.google.com/app/apikey"
                             target="_blank"
-                            className="inline-flex items-center text-gemini-blue underline"
+                            className="inline-flex items-center text-fgAccent1 underline"
                             onClick={(e) => e.stopPropagation()}
                           >
                             Gemini API 密钥

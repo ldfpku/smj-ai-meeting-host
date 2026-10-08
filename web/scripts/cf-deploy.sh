@@ -5,7 +5,8 @@
 # account than the one pinned in wrangler.jsonc ("account_id"). Then a plain
 # `pnpm exec wrangler deploy` fails or, worse, lands in the wrong place. This
 # script keeps the login for the pinned account in a profile of its own
-# (WRANGLER_PROFILE_DIR, default ~/.wrangler-profiles/smj-meeting) and refuses
+# (WRANGLER_PROFILE_DIR, default ~/.cloudflared-zy/wrangler-home, the same
+# profile the other ZY deploy scripts use) and refuses
 # to deploy when that profile is logged in to a different account.
 #
 #   bash scripts/cf-build-in-docker.sh      # from web/, build first
@@ -18,7 +19,7 @@ cd "$(dirname "$0")/.."
 account_id="$(sed -n 's/^[[:space:]]*"account_id"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{32\}\)".*/\1/p' wrangler.jsonc | head -n 1)"
 [ -n "$account_id" ] || { echo "no account_id in wrangler.jsonc" >&2; exit 1; }
 
-profile="${WRANGLER_PROFILE_DIR:-$HOME/.wrangler-profiles/smj-meeting}"
+profile="${WRANGLER_PROFILE_DIR:-$HOME/.cloudflared-zy/wrangler-home}"
 mkdir -p "$profile"
 
 wrangler() {
