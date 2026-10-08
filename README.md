@@ -233,11 +233,15 @@ DISC 性格测评结论、绩效评价与人员姓名**不写入任何提示词�
 
 ## Deployment
 
+域名 `smjtools.com` 已由原 DF 账号转到 ZY 账号。网页 Worker、域名绑定和 Cloudflare Access
+现在都在 ZY（`wrangler.jsonc` 里的 `account_id` 锁定账号）；DF 里留着的同名旧 Worker 不再使用，
+也不要再往 DF 发布。LiveKit agent 与 Gemini 不受域名转移影响。
+
 线上地址：<https://meeting.smjtools.com>
 
 | 部分 | 运行在 | 怎么发布 |
 |---|---|---|
-| 网页 | Cloudflare Workers（Worker 名 `smj-meeting`） | 在 `web/` 下构建后 `pnpm exec wrangler deploy` |
+| 网页 | Cloudflare Workers（ZY 账号，Worker 名 `smj-meeting`） | 在 `web/` 下构建后 `bash scripts/cf-deploy.sh` |
 | agent | LiveKit Cloud | GitHub Actions 里手动运行 `Deploy Agent to LiveKit Cloud` |
 
 ### 谁能登录
@@ -245,8 +249,8 @@ DISC 性格测评结论、绩效评价与人员姓名**不写入任何提示词�
 域名前面是 Cloudflare Access（Zero Trust）。打开页面先要输入邮箱，收到验证码后才能进入；
 不在名单里的邮箱收不到验证码。页面、接口、静态文件都在保护范围内。
 
-名单在 Cloudflare 控制台：Zero Trust → Access → Policies → `smj-meeting-users`。
-增减人员只改这一处，不需要重新发布。
+名单在 ZY 账号的 Cloudflare 控制台：Zero Trust → Access → Policies → `smj-meeting-users`。
+增减人员只改这一处，不需要重新发布。名单是会议应用自己的，不随公司其他应用的名单自动变化。
 
 Worker 只绑定了这一个域名，没有开放 `workers.dev` 和预览地址，否则会绕过登录。
 
@@ -255,7 +259,7 @@ Worker 只绑定了这一个域名，没有开放 `workers.dev` 和预览地址�
 ```bash
 cd web
 pnpm cf:build                 # Linux、macOS、WSL
-pnpm exec wrangler deploy
+bash scripts/cf-deploy.sh
 ```
 
 在 Windows 上 OpenNext 构建出的包运行时会出错，改用容器构建（需要 Docker）：
@@ -263,12 +267,17 @@ pnpm exec wrangler deploy
 ```bash
 cd web
 bash scripts/cf-build-in-docker.sh
-pnpm exec wrangler deploy
+bash scripts/cf-deploy.sh
 ```
+
+不要直接用 `pnpm exec wrangler deploy`：本机日常的 `wrangler login` 可能是别的账号（DF）。
+`cf-deploy.sh` 把 ZY 的登录放在单独的目录（默认 `~/.wrangler-profiles/smj-meeting`，
+可用 `WRANGLER_PROFILE_DIR` 改），首次运行会打开浏览器，选 ZY 账号并允许；
+账号不是 `wrangler.jsonc` 里锁定的那个时会拒绝发布。
 
 密钥存在 Worker 的 secret 里，只在首次发布或更换时设置：
 `LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`GEMINI_API_KEY`、
-`AI_WORKER_URL`、`AI_WORKER_KEY`（`pnpm exec wrangler secret put <名称>`）。
+`AI_WORKER_URL`、`AI_WORKER_KEY`（`bash scripts/cf-deploy.sh secret put <名称>`）。
 不要设置 `LIVEKIT_AGENT_NAME`：线上要连的是默认名称的 agent。
 
 Worker 指定在美国西部运行（`wrangler.jsonc` 的 `placement`）。Gemini 会拒绝来自部分地区

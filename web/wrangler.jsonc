@@ -4,6 +4,7 @@
   // Who may open it is decided by Cloudflare Access (Zero Trust) in front of
   // the domain, not by this Worker: see "Deployment" in the README.
   "name": "smj-meeting",
+  "account_id": "35f7abfbdeb4851714ce57f480531c4a",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-09-20",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -22,6 +23,10 @@
   // is also where the LiveKit project lives.
   "placement": { "region": "gcp:us-west1" },
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
   }
 }
