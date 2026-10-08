@@ -44,12 +44,22 @@ export function SmjarVisualizer({
       {/* 背景水印：品牌水印图（透明底、低不透明度，专为平铺/衬底设计） */}
       <div className="absolute z-0 left-1/2 top-1/4 -translate-x-1/2 -translate-y-10 opacity-[0.06] pointer-events-none">
         <Image
-          src="/static/brand/watermark.webp"
+          src="/static/brand/smj-symbol-blue.svg"
           alt=""
           aria-hidden
-          width={160}
+          width={140}
           height={160}
-          className="h-40 w-40 object-contain"
+          unoptimized
+          className="h-40 w-auto object-contain dark:hidden"
+        />
+        <Image
+          src="/static/brand/smj-symbol-white.svg"
+          alt=""
+          aria-hidden
+          width={140}
+          height={160}
+          unoptimized
+          className="hidden h-40 w-auto object-contain dark:block"
         />
       </div>
       <SmjarMark volume={agentVolume} state={agentState} />

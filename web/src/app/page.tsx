@@ -12,9 +12,9 @@ export async function generateMetadata({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }): Promise<Metadata> {
-  let title = "SMJAR | AI 会议主持人";
+  let title = "SMJ | AI 会议主持人";
   let description =
-    "SMJAR 会议制度执行器：装载公司真实会议模板，严格控时、跑题即刻打断、按名单点名征询、催办四要素决议并生成正式纪要。";
+    "SMJ 会议制度执行器：装载公司真实会议模板，严格控时、跑题即刻打断、按名单点名征询、催办四要素决议并生成正式纪要。";
 
   const params = await searchParams;
   const presetId = params?.preset;
@@ -23,8 +23,8 @@ export async function generateMetadata({
       (preset) => preset.id === presetId
     );
     if (selectedPreset) {
-      title = `SMJAR | ${selectedPreset.name}`;
-      description = `与「${selectedPreset.name}」实时语音对话。SMJAR 内部工具。`;
+      title = `SMJ | ${selectedPreset.name}`;
+      description = `与「${selectedPreset.name}」实时语音对话。SMJ 内部工具。`;
     }
   }
 
@@ -32,7 +32,11 @@ export async function generateMetadata({
     title,
     description,
     icons: {
-      icon: [{ url: "/static/brand/favicon.webp", type: "image/webp" }],
+      icon: [
+        { url: "/static/brand/smj-icon.svg", type: "image/svg+xml" },
+        { url: "/static/brand/favicon.ico", sizes: "48x48" },
+      ],
+      apple: "/static/brand/smj-icon-180.png",
     },
     openGraph: {
       title,
@@ -64,14 +68,15 @@ export default function Dashboard() {
       <footer className="hidden md:flex md:items-center md:justify-between gap-4 py-3 px-8 text-xs text-fg3 w-full border-t border-separator1">
         <div className="flex items-center gap-2 min-w-0">
           <Image
-            src="/static/brand/logo-mark.webp"
+            src="/static/brand/smj-icon-16.svg"
             alt=""
             aria-hidden
             width={16}
             height={16}
-            className="h-4 w-4 object-contain opacity-90"
+            unoptimized
+            className="h-4 w-4 object-contain"
           />
-          <span className="font-medium text-fg2">SMJAR</span>
+          <span className="font-medium text-fg2">SMJ 斯米伽</span>
           <span className="text-separator1">|</span>
           <span className="truncate">井下工具 · 制造 / 租赁 / 维保</span>
         </div>

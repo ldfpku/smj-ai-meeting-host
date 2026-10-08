@@ -108,7 +108,7 @@ export function AuthDialog({
                 className="flex flex-col gap-4"
               >
                 <DialogHeader className="gap-2">
-                  <DialogTitle>SMJAR · AI 会议主持人</DialogTitle>
+                  <DialogTitle>SMJ · AI 会议主持人</DialogTitle>
                   <DialogDescription>
                     公司会议的 AI 主持助手：按标准会议模板控时、纠偏跑题、点名征询意见、
                     催办带齐四要素的决议，并生成可回执确认的会议纪要。

@@ -12,6 +12,10 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  // next/image goes through /_next/image; with this binding Cloudflare Images
+  // resizes and recompresses the pictures. Without it the originals are sent
+  // unchanged and the Worker logs "env.IMAGES binding is not defined".
+  "images": { "binding": "IMAGES" },
   // Only the custom domain. A workers.dev or preview address would be a way
   // around the login.
   "workers_dev": false,
