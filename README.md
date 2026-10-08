@@ -277,7 +277,8 @@ bash scripts/cf-deploy.sh
 
 密钥存在 Worker 的 secret 里，只在首次发布或更换时设置：
 `LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`GEMINI_API_KEY`、
-`AI_WORKER_URL`、`AI_WORKER_KEY`（`bash scripts/cf-deploy.sh secret put <名称>`）。
+`AI_WORKER_URL`、`AI_WORKER_KEY`。可以逐个用 `bash scripts/cf-deploy.sh secret put <名称>`，
+或在仓库根运行 `bash web/scripts/cf-set-secrets.sh`，把 `.env.local` 里的这六项一次写入（不打印值）。
 不要设置 `LIVEKIT_AGENT_NAME`：线上要连的是默认名称的 agent。
 
 Worker 指定在美国西部运行（`wrangler.jsonc` 的 `placement`）。Gemini 会拒绝来自部分地区
