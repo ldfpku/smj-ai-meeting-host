@@ -747,15 +747,20 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
     close = steps.get("close_1")
     plan = steps.get("plan")
     if close and plan:
-        said = " ".join(
-            s["text"]
-            for s in sorted(meeting.transcript.values(), key=lambda s: s["t"])
-            if s["role"] == "moderator" and close["start"] <= s["t"] < plan["start"]
-        )
+        # judged by the sound, not by the transcript: a short "好，下面讨论……"
+        # is an announcement too
+        spoke = [
+            seg
+            for seg in segments
+            if close["speech_end"] <= seg[0] < plan["start"] and seg[1] >= 1.0
+        ]
         check(
             "推进时不口头宣布",
-            not re.search(r"现在进入第|进入第\s*\d\s*项", said),
-            "看板同步了，会议助手没有宣布新议题" if not said else said[:100],
+            not spoke,
+            "看板同步了，会议助手没有出声"
+            if not spoke
+            else f"会议助手出声 {sum(x[1] for x in spoke):.0f} 秒："
+            + meeting.moderator_text_since(close["speech_end"])[:80],
         )
 
     check(
