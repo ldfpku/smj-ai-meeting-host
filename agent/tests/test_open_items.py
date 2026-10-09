@@ -41,25 +41,25 @@ def test_words_in_another_order_only_count_shortly_after():
 
 def test_the_announcement_reads_like_a_sentence():
     assert spoken_open_item("赵部长", "提请总经理签批并留档") == (
-        "这条今天定不了，记为未决事项，由赵部长跟进。会后提请总经理签批并留档。"
+        "这条今天先不拍板，记作未决事项，由赵部长会后牵头。会后提请总经理签批并留档。"
     )
     # a path that is a rule in itself is quoted, not woven into the sentence
     assert spoken_open_item("", "优先级冲突由本会裁决；临时插单由总经理签批，PMC 留档") == (
-        "这条今天定不了，记为未决事项，由相关责任人跟进。"
-        "升级路径是：优先级冲突由本会裁决；临时插单由总经理签批，PMC 留档。"
+        "这条今天先不拍板，记作未决事项，由相关责任人会后牵头。"
+        "上报路径是：优先级冲突由本会裁决；临时插单由总经理签批，PMC 留档。"
     )
-    assert spoken_open_item("赵部长", "") == "这条今天定不了，记为未决事项，由赵部长跟进。"
+    assert spoken_open_item("赵部长", "") == "这条今天先不拍板，记作未决事项，由赵部长会后牵头。"
 
 
 def test_the_summary_counts_what_is_on_the_board():
     full = {"owner": "李工", "dueDate": "周五", "verification": "良率", "evidence": "报表"}
     part = {"owner": "李工", "dueDate": "", "verification": "", "evidence": ""}
     assert spoken_summary([full], [{"owner": "陈主管"}]) == (
-        "本次会议共形成 1 条决议，四要素齐全；另有 1 条未决事项，由陈主管跟进。"
-        "会议到此结束，谢谢各位。"
+        "本次会议共记录 1 条决议，信息都齐全；另有 1 条未决事项，由陈主管会后跟进。"
+        "以上是会议助手的记录，请主持人确认。"
     )
     assert spoken_summary([full, part], []) == (
-        "本次会议共形成 2 条决议，其中 1 条四要素还不齐全；没有未决事项。"
-        "会议到此结束，谢谢各位。"
+        "本次会议共记录 2 条决议，其中 1 条信息还不齐全；没有未决事项。"
+        "以上是会议助手的记录，请主持人确认。"
     )
-    assert spoken_summary([], []).startswith("本次会议没有形成决议；没有未决事项。")
+    assert spoken_summary([], []).startswith("本次会议没有记录决议；没有未决事项。")

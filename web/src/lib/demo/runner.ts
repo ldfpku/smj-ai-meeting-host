@@ -8,9 +8,7 @@ import {
   TranscriptionSegment,
 } from "livekit-client";
 import {
-  DEMO_ANSWERS,
   DEMO_CONFIG,
-  DEMO_DEFAULT_ANSWER,
   DEMO_STEPS,
   DEMO_VOICES,
   DemoStep,
@@ -52,7 +50,7 @@ interface StepRecord {
   yieldedAt: number | null;
   retried: boolean;
   skipped: boolean;
-  /** 发言期间主持人开口的时刻 */
+  /** 发言期间会议助手开口的时刻 */
   moderatorSpokeAt: number | null;
 }
 
@@ -60,14 +58,16 @@ class Stopped extends Error {}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** 把一场演示会议从头开到尾，并记下主持人的每个反应。 */
+/** 把一场演示会议从头开到尾，并记下会议助手的每个反应。 */
 export class DemoRunner {
   private readonly t0 = performance.now();
   private stopped = false;
   private agentState = "";
   private agendaIndex = 0;
-  private answered = 0;
   private rollCalls: { name: string; t: number }[] = [];
+  private suggestions: { t: number; data: any }[] = [];
+  /** 当前这一步是否由运行器扮演主持人去点“采纳” */
+  private chairConfirms = false;
   private decisions = new Map<string, { data: any; t: number }[]>();
   private openItems: { data: any; t: number }[] = [];
   private driftWarnings: { t: number; data: any }[] = [];
@@ -216,6 +216,11 @@ export class DemoRunner {
         this.log("登记未决事项", `${o.issue}｜跟进人：${o.owner || "缺"}`);
         return;
       }
+      case "drift_suggestion":
+        this.suggestions.push({ t: this.now(), data });
+        this.log("提示主持人", `${data.reason ?? ""}（${data.source ?? ""}）`);
+        if (this.chairConfirms) void this.confirmAsChair(data);
+        return;
       case "drift_warning":
         if (data.active === false) return;
         this.driftWarnings.push({ t: this.now(), data });
@@ -240,6 +245,24 @@ export class DemoRunner {
     }
   }
 
+  /** 主持人在看板上点“请会议助手提醒”，和界面按钮发的是同一个 RPC */
+  private async confirmAsChair(suggestion: any): Promise<void> {
+    this.chairConfirms = false;
+    this.log("主持人采纳", "点了“请会议助手提醒”");
+    try {
+      await this.room.localParticipant.performRpc({
+        destinationIdentity: this.agent.identity,
+        method: "pg.forceIntervene",
+        payload: JSON.stringify({
+          suggestionId: suggestion.suggestionId,
+          reason: suggestion.reason,
+        }),
+      });
+    } catch (err) {
+      this.log("采纳失败", err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // ---- 发言与等待 ---------------------------------------------------------------
 
   private check(): void {
@@ -258,7 +281,7 @@ export class DemoRunner {
     );
   }
 
-  /** 把发言权交给主持人，等它把要说的话说完 */
+  /** 把发言权交给会议助手，等它把要说的话说完 */
   private async waitReply(minMs = 4000, maxMs = 45000): Promise<void> {
     const started = performance.now();
     while (performance.now() - started < maxMs) {
@@ -271,7 +294,7 @@ export class DemoRunner {
         return;
       }
     }
-    this.log("等待超时", `主持人状态：${this.agentState}`);
+    this.log("等待超时", `会议助手状态：${this.agentState}`);
   }
 
   private async say(
@@ -306,11 +329,11 @@ export class DemoRunner {
       if (record && record.moderatorSpokeAt === null) {
         record.moderatorSpokeAt = this.now();
       }
-      // 被主持人打断的人会停下来
-      if (record?.expect === "interrupt") {
+      // 会议助手开口提醒后，发言人会停下来
+      if (record?.expect === "interrupt" || record?.expect === "suggest") {
         yieldedAt = this.now();
         this.audio.stop();
-        this.log("发言人停下", `${speaker}被打断后停止发言`);
+        this.log("发言人停下", `${speaker}听到提醒后停止发言`);
         break;
       }
     }
@@ -319,27 +342,8 @@ export class DemoRunner {
     return yieldedAt;
   }
 
-  private async answerRollCalls(): Promise<void> {
-    for (let round = 0; round < 4; round++) {
-      const waiting = this.rollCalls.slice(this.answered);
-      if (waiting.length === 0) return;
-      this.answered = this.rollCalls.length;
-      // 看板先亮，主持人的问题后到
-      await this.waitReply(2000);
-      const agenda = DEMO_CONFIG.agendas[this.agendaIndex]?.id ?? "";
-      for (const call of waiting) {
-        if (!DEMO_VOICES[call.name]) continue;
-        const text = DEMO_ANSWERS[agenda]?.[call.name] ?? DEMO_DEFAULT_ANSWER;
-        await this.say(call.name, text, `answer:${agenda}`, "被点名后表态");
-        await sleep(600);
-      }
-      await this.waitReply();
-    }
-  }
-
   private async floorToModerator(): Promise<void> {
     await this.waitReply();
-    await this.answerRollCalls();
   }
 
   // ---- 全流程 -------------------------------------------------------------------
@@ -358,12 +362,6 @@ export class DemoRunner {
     for (const step of DEMO_STEPS) {
       add(step.say, step.text);
       if (step.retry) add(step.say, step.retry);
-    }
-    for (const answers of Object.values(DEMO_ANSWERS)) {
-      for (const [speaker, text] of Object.entries(answers)) add(speaker, text);
-    }
-    for (const speaker of Object.keys(DEMO_VOICES)) {
-      add(speaker, DEMO_DEFAULT_ANSWER);
     }
 
     let done = 0;
@@ -401,17 +399,13 @@ export class DemoRunner {
   }
 
   private async play(): Promise<void> {
-    this.log("开始", `演示会议「${DEMO_CONFIG.topic}」，等待主持人开场`);
-    const started = performance.now();
-    while (
-      !this.audio.moderatorSpeaking &&
-      performance.now() - started < 30000
-    ) {
+    this.log("开始", `演示会议「${DEMO_CONFIG.topic}」：会议助手不会自己开场，先安静几秒`);
+    // 主持人还没开口：会议助手应当一直安静
+    const quietFrom = performance.now();
+    while (performance.now() - quietFrom < 6000) {
       await sleep(100);
       this.check();
     }
-    await this.waitReply(2000, 60000);
-    this.log("开场结束", "");
 
     for (const step of DEMO_STEPS) {
       const record: StepRecord = {
@@ -427,8 +421,9 @@ export class DemoRunner {
       };
       this.steps.push(record);
       const agendaBefore = this.agendaIndex;
+      this.chairConfirms = step.expect === "suggest";
       if (step.until === "advance" && agendaBefore > 0) {
-        // 主持人自己推进了，不用再有人提
+        // 议程已经推进，不用再提
         record.skipped = true;
         record.end = this.now();
         continue;
@@ -441,6 +436,7 @@ export class DemoRunner {
         record
       );
       record.speechEnd = this.now();
+      this.chairConfirms = false;
       if (step.then === "reply") await this.floorToModerator();
       else await sleep(800);
 
@@ -456,11 +452,11 @@ export class DemoRunner {
       record.end = this.now();
     }
 
-    // 会议总结由系统宣布，比主持人自己开口晚一点
+    // 小结由系统宣布，比会议助手自己开口晚一点
     const asked = this.steps[this.steps.length - 1]?.start ?? this.now();
     const waitFrom = performance.now();
     while (performance.now() - waitFrom < 20000) {
-      if (this.moderatorText(asked).includes("会议到此结束")) {
+      if (this.moderatorText(asked).includes("请主持人确认")) {
         await this.waitReply(1000);
         break;
       }
@@ -473,7 +469,7 @@ export class DemoRunner {
   }
 
   private async endMeeting(): Promise<void> {
-    this.log("结束会议", "向主持人发出结束指令");
+    this.log("结束会议", "主持人点了结束，向会议助手发出指令");
     const asked = performance.now();
     try {
       await this.room.localParticipant.performRpc({
@@ -509,52 +505,82 @@ export class DemoRunner {
     const first = this.steps[0];
     const finished = this.steps.length === DEMO_STEPS.length;
 
-    // 开场
-    const opening = this.moderatorText(0, first ? first.start : Infinity);
+    // 开场：会议助手不抢着开场，被邀请后才播报议程
+    const invite = this.step("invite");
+    const before = this.moderatorText(0, invite ? invite.start : Infinity);
     add(
-      "开场播报",
-      !!opening && opening.includes(DEMO_CONFIG.agendas[0].title),
-      opening ? `「${opening.slice(0, 80)}」` : "没有收到主持人的开场白"
+      "不抢着开场",
+      before === "",
+      before === ""
+        ? "主持人开口之前，会议助手一直安静"
+        : `主持人还没开口，会议助手先说了：「${before.slice(0, 60)}」`
     );
-    add(
-      "开场后指定第一位发言人",
-      opening.includes(DEMO_CONFIG.agendas[0].presenter ?? ""),
-      opening.includes(DEMO_CONFIG.agendas[0].presenter ?? "")
-        ? `请了${DEMO_CONFIG.agendas[0].presenter}先介绍情况`
-        : "开场白里没有请汇报人发言"
-    );
+    if (invite) {
+      const read = this.moderatorText(invite.start, this.step("problem")?.start);
+      add(
+        "被邀请后播报议程",
+        read.includes(DEMO_CONFIG.agendas[0].title),
+        read ? `「${read.slice(0, 80)}」` : "没有收到会议助手的话"
+      );
+      add(
+        "不宣布讨论开始",
+        !/讨论正式开始|现在开始讨论|宣布.*开始/.test(read),
+        /讨论正式开始|现在开始讨论|宣布.*开始/.test(read)
+          ? "会议助手宣布了开始"
+          : "播报完把话交还给了主持人"
+      );
+    }
 
     // 正常发言时不插话
     const quiet = this.steps.filter(
-      (s) => !s.expect && !s.skipped && s.moderatorSpokeAt !== null
+      (s) => !s.expect && !s.skipped && s.id !== "invite" && s.moderatorSpokeAt !== null
     );
     add(
       "正常发言时保持安静",
       quiet.length === 0,
       quiet.length === 0
-        ? "参会人讲话期间主持人没有插话"
+        ? "参会人讲话期间会议助手没有插话"
         : `在这些发言中途开了口：${quiet.map((s) => s.id).join("、")}`
     );
 
-    // 跑题
+    // 跑题：先提示主持人，采纳后才开口
     const off = this.step("off_topic");
     if (off) {
-      const warning = this.driftWarnings.find((w) => w.t >= off.start);
+      const suggestion = this.suggestions.find((w) => w.t >= off.start);
       const spoke = off.moderatorSpokeAt;
-      const parts = [
-        warning
-          ? `跑题开始后 ${(warning.t - off.start).toFixed(1)} 秒出现提示`
-          : "没有出现跑题提示",
+      add(
+        "跑题先提示主持人",
+        !!suggestion,
+        suggestion
+          ? `跑题开始后 ${(suggestion.t - off.start).toFixed(1)} 秒，看板提示了主持人`
+          : "没有出现提示"
+      );
+      add(
+        "采纳之前不开口",
+        !suggestion || spoke === null || spoke >= suggestion.t,
+        spoke !== null && suggestion && spoke < suggestion.t
+          ? `${(spoke - off.start).toFixed(1)} 秒时会议助手没等主持人采纳就开了口`
+          : "会议助手等主持人点了采纳才开口"
+      );
+      add(
+        "采纳后提醒并让发言人停下",
+        spoke !== null && off.yieldedAt !== null,
         spoke !== null
-          ? `${(spoke - off.start).toFixed(1)} 秒时主持人已开口`
-          : "发言人讲完之前主持人没有开口",
-      ];
-      add("跑题打断", !!warning && off.yieldedAt !== null, parts.join("，"));
+          ? `${(spoke - off.start).toFixed(1)} 秒时开口，发言人${
+              off.yieldedAt !== null ? "停下了" : "没有停"
+            }`
+          : "采纳后会议助手没有开口"
+      );
       const after = this.moderatorText(off.start, this.step("proposal")?.start);
       add(
-        "打断的话说到了当前议题",
+        "提醒的话说到了当前议题",
         after.includes(DEMO_CONFIG.agendas[0].title),
-        after ? `「${after.slice(0, 80)}」` : "没有收到主持人的话"
+        after ? `「${after.slice(0, 80)}」` : "没有收到会议助手的话"
+      );
+      add(
+        "提醒是对主持人说的",
+        /王部长|主持人/.test(after) && !/各位，先停/.test(after),
+        after ? `「${after.slice(0, 60)}」` : "没有收到会议助手的话"
       );
     }
 
@@ -570,15 +596,15 @@ export class DemoRunner {
         "要素不全时不编造",
         early.length === 0,
         early.length === 0
-          ? "方案只说了责任人时，主持人没有记成四要素齐全的决议"
+          ? "方案只说了责任人时，会议助手没有记成四要素齐全的决议"
           : `只听到责任人就记下了完整决议：时限「${early[0].data.dueDate}」、验证「${early[0].data.verification}」`
       );
       const asked = this.moderatorText(proposal.start, complete.start);
       // 不追问不算错：参会人可能正要接着说。这一项只记录，不判对错。
       add(
-        "追问缺少的要素",
-        /时限|什么时候|验证|证据/.test(asked) ? true : null,
-        asked ? `「${asked.slice(0, 80)}」` : "主持人没有追问，参会人自己补上了"
+        "确认缺少的要素",
+        /牵头|几号|验证|记录|时限|什么时候|证据/.test(asked) ? true : null,
+        asked ? `「${asked.slice(0, 80)}」` : "会议助手没有出声，参会人自己补上了"
       );
     }
     const last = [...this.decisions.values()].map((v) => v[v.length - 1].data);
@@ -595,32 +621,25 @@ export class DemoRunner {
         : "没有记录任何决议"
     );
 
-    // 点名
-    const required = DEMO_CONFIG.attendees
-      .filter((a) => a.required)
-      .map((a) => a.name);
-    const called = new Set(this.rollCalls.map((c) => c.name));
-    const missing = required.filter((n) => !called.has(n));
+    // 不逐个点名：沉默不被当作同意，也不被追着表态
     add(
-      "点名征询必须发言的人",
-      missing.length === 0,
-      missing.length === 0
-        ? `点到了${required.join("、")}`
-        : `没有点到${missing.join("、")}`
+      "没有逐个点名",
+      this.rollCalls.length === 0,
+      this.rollCalls.length === 0
+        ? "整场没有点名"
+        : `点了名：${this.rollCalls.map((c) => c.name).join("、")}`
     );
 
-    // 推进
+    // 推进：只记录，不口头宣布
     const close = this.step("close_1");
     if (close) {
       add(
-        "推进到下一项议题",
+        "记录推进到下一项议题",
         this.agendaIndex >= 1,
         this.agendaIndex >= 1
-          ? close.skipped
-            ? "主持人自己推进了"
-            : close.retried
-            ? "第二次要求后才推进"
-            : "第一次要求后就推进了"
+          ? close.retried
+            ? "第二次说明后才记录"
+            : "第一次说明后就记录了"
           : "议程没有推进"
       );
       const said = this.moderatorText(
@@ -628,9 +647,11 @@ export class DemoRunner {
         this.step("plan")?.start
       );
       add(
-        "新议题请汇报人先讲",
-        said.includes(DEMO_CONFIG.agendas[1].presenter ?? ""),
-        said ? `「${said.slice(-80)}」` : "没有收到主持人的话"
+        "推进时不口头宣布",
+        !/现在进入第|进入第\s*\d\s*项/.test(said),
+        /现在进入第|进入第\s*\d\s*项/.test(said)
+          ? `「${said.slice(-80)}」`
+          : "看板同步了，会议助手没有宣布新议题"
       );
     }
 
@@ -649,9 +670,9 @@ export class DemoRunner {
     if (wrap) {
       const summary = this.moderatorText(wrap.start);
       add(
-        "会议总结",
-        /决议/.test(summary) && /未决/.test(summary),
-        summary ? `「${summary.slice(0, 100)}」` : "主持人没有做总结"
+        "会议小结（请主持人确认，不宣布散会）",
+        /决议/.test(summary) && /未决/.test(summary) && /请主持人确认/.test(summary) && !/会议到此结束/.test(summary),
+        summary ? `「${summary.slice(0, 100)}」` : "会议助手没有做小结"
       );
     }
 
@@ -659,7 +680,7 @@ export class DemoRunner {
       "结束会议",
       finished ? this.ended : null,
       this.ended
-        ? "主持人收到指令后关闭了房间"
+        ? "收到指令后关闭了房间"
         : finished
         ? "发出结束指令后 8 秒内房间没有关闭"
         : "演示没有走完"
@@ -669,7 +690,7 @@ export class DemoRunner {
     add(
       "实时转写",
       room.length > 0,
-      `会场 ${room.length} 段，主持人 ${this.transcript.size - room.length} 段`
+      `会场 ${room.length} 段，会议助手 ${this.transcript.size - room.length} 段`
     );
     return findings;
   }

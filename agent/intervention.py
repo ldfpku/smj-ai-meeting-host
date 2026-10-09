@@ -1,4 +1,4 @@
-"""Who may interrupt the meeting, and when.
+"""Who may speak up about a digression, and when.
 
 Two detectors can decide that the discussion went off topic: the Jev drift
 detector (code-driven) and the Live model itself (``warn_topic_drift``). Both
@@ -15,10 +15,16 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
+# The words of an interruption are in phrasebook.py; re-exported because the
+# gate and its tests are where they were used first.
+from phrasebook import INTERRUPTION_REASONS, spoken_interruption  # noqa: F401
+
 InterventionMode = Literal["auto", "semi_auto"]
 InterventionSource = Literal["jev", "model", "manual"]
 
-DEFAULT_MODE: InterventionMode = "auto"
+#: Prompting, not interrupting: the assistant shows a suggestion to the chair
+#: and speaks only when asked to (auto is opt-in per meeting).
+DEFAULT_MODE: InterventionMode = "semi_auto"
 DEFAULT_THRESHOLD = 0.85
 DEFAULT_COOLDOWN_SECONDS = 45.0
 DEFAULT_CONSECUTIVE_HITS = 1
@@ -28,40 +34,6 @@ DEFAULT_CONSECUTIVE_HITS = 1
 AGENDA_GRACE_SECONDS = 15.0
 #: An undone interruption was a false positive; back off for longer.
 UNDO_COOLDOWN_FACTOR = 2.0
-
-
-#: What the moderator says first, by meeting style (``style`` in the meeting
-#: config). Everyday words only: it is heard once, over other people talking.
-_OPENERS: dict[str, str] = {
-    "strict": "各位，先停一下。",
-    "gentle": "不好意思，打断一下。",
-}
-#: The second sentence, by the reason Jev picked. ``{topic}`` is the agenda title.
-_REDIRECTS: dict[str, str] = {
-    "unrelated_chitchat": "这个话题我们会后再聊，现在先回到{topic}。",
-    "other_agenda_item": "这件事后面再谈，现在先把{topic}谈完。",
-    "side_issue": "这个细节会后再谈，现在先回到{topic}的主要问题。",
-    "argument": "这一点先不争了，现在先回到{topic}，把结论定下来。",
-}
-INTERRUPTION_REASONS = tuple(_REDIRECTS)
-_DEFAULT_REDIRECT = "这个话题先放一放，现在先回到{topic}。"
-_CONCISE_LINE = "请先回到{topic}。"
-
-
-def spoken_interruption(title: str, reason_code: str = "", style: str = "strict") -> str:
-    """The words the moderator says to bring the meeting back on topic.
-
-    Two short sentences, about 7 seconds of speech. The goal of the agenda item
-    and the reason of the interruption are left out on purpose: both are on the
-    kanban, and reading them aloud made the interruption last 15 seconds.
-    """
-    title = (title or "").strip()
-    topic = f"「{title}」" if title else "当前议题"
-    if style == "concise":
-        return _CONCISE_LINE.format(topic=topic)
-    opener = _OPENERS.get(style, _OPENERS["strict"])
-    redirect = _REDIRECTS.get(reason_code, _DEFAULT_REDIRECT)
-    return opener + redirect.format(topic=topic)
 
 
 def _clamp(value: float, low: float, high: float) -> float:

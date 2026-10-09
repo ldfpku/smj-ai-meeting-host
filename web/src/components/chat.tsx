@@ -64,7 +64,7 @@ export function Chat() {
 
         toast({
           title: "主持人不可用",
-          description: "当前无法连接到 AI 主持人，请稍后重试。",
+          description: "当前无法连接到 会议助手，请稍后重试。",
           variant: "destructive",
         });
       }, 5000);
@@ -88,7 +88,7 @@ export function Chat() {
 
         toast({
           title: "主持人已断开",
-          description: "AI 主持人意外离开了会话，请重试。",
+          description: "会议助手意外离开了会话，请重试。",
           variant: "destructive",
         });
       }, 5000);

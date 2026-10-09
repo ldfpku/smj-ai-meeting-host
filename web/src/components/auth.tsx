@@ -108,10 +108,10 @@ export function AuthDialog({
                 className="flex flex-col gap-4"
               >
                 <DialogHeader className="gap-2">
-                  <DialogTitle>SMJ · AI 会议主持人</DialogTitle>
+                  <DialogTitle>SMJ · 会议助手</DialogTitle>
                   <DialogDescription>
-                    公司会议的 AI 主持助手：按标准会议模板控时、纠偏跑题、点名征询意见、
-                    催办带齐四要素的决议，并生成可回执确认的会议纪要。
+                    主持人的 AI 副手：按标准会议模板协助控时、提示跑题、记录并核对决议，
+                    并生成可回执确认的会议纪要。
                   </DialogDescription>
                   <DialogDescription>
                     你需要一个有效的{" "}

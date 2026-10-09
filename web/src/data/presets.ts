@@ -20,9 +20,9 @@ export enum PresetGroup {
 export const defaultPresets: Preset[] = [
   {
     id: "meeting-moderator",
-    name: "会议主持人",
+    name: "会议助手",
     description:
-      "SMJ 会议制度执行器：装载公司真实会议模板，严格控时、跑题切入、点名征询、催办四要素决议并生成正式纪要。",
+      "SMJ 会议助手：协助主持人控时、提示跑题、记录决议与未决事项，并生成可回执确认的正式纪要。",
     instructions: generateMeetingInstructions(defaultMeetingConfig),
     sessionConfig: {
       ...defaultSessionConfig,

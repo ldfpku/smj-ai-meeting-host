@@ -85,7 +85,7 @@ export function TranscriptPanel({
                         : "bg-muted text-muted-foreground"
                     }`}
                   >
-                    {isModerator ? "主持人" : "会场"}
+                    {isModerator ? "会议助手" : "会场"}
                   </span>
                   <span>{clock(entry.at - origin)}</span>
                 </div>

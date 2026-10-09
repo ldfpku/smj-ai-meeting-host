@@ -4,7 +4,7 @@ import { useAgent } from "@/hooks/use-agent";
 import { useToast } from "@/hooks/use-toast";
 
 /**
- * 向 AI 主持人发 RPC。成功返回解析后的响应，失败返回 null 并弹出提示。
+ * 向 会议助手发 RPC。成功返回解析后的响应，失败返回 null 并弹出提示。
  *
  * performRpc 必须指定具体的目标身份；主持人尚未进入房间时没有身份可填。
  */
@@ -21,7 +21,7 @@ export function useAgentRpc() {
       if (!room?.localParticipant || !agent?.identity) {
         toast({
           title: "主持人尚未就位",
-          description: "AI 主持人还没有连接到会议，请稍候重试。",
+          description: "会议助手还没有连接到会议，请稍候重试。",
           variant: "destructive",
         });
         return null;
@@ -41,7 +41,7 @@ export function useAgentRpc() {
         console.error(`${method} RPC failed`, err);
         toast({
           title: "指令未送达主持人",
-          description: "AI 主持人未响应本次操作，请重试。",
+          description: "会议助手未响应本次操作，请重试。",
           variant: "destructive",
         });
         return null;

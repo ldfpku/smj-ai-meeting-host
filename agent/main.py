@@ -55,6 +55,19 @@ from intervention import (
 )
 from meeting_limits import IDLE, LIMIT, End, LimitWatch, MeetingLimits, Notice
 from model_caps import resolve_model
+from phrasebook import (
+    call_name,
+    chair_name,
+    spoken_decision,
+    spoken_missing_elements,
+    spoken_no_outcome,
+    spoken_open_item,
+    spoken_open_item_owner,
+    spoken_open_item_without_owner,
+    spoken_report_request,
+    spoken_stance_request,
+)
+from phrasebook import spoken_summary as phrasebook_summary
 from speech_gate import Answer, SpeechGate
 from spoken_clips import SpokenClips
 
@@ -124,19 +137,10 @@ def redact_config_payload(payload: str) -> str:
     return json.dumps(shown, ensure_ascii=False)
 
 
-#: Cue that makes the moderator deliver the opening announcement. It is worded
-#: as a user-side prompt because it may be delivered as realtime text input
-#: (see SessionManager.cue_model), not as model instructions.
-OPENING_CUE_MEETING = (
-    "【系统提示】会议现在开始。请立即按照你的开场要求开口："
-    "清晰简短地播报会议名称、总时长与各项议题，然后宣布讨论正式开始。"
-    "最后一句照原话说：“{first_words}”说完就停。"
-    "不要复述本提示。"
-)
-#: Without this the model paraphrases the interruption and keeps adding to it.
+#: Without this the model paraphrases the sentence and keeps adding to it.
 SAY_EXACTLY = (
     "只说下面引号里的话，照原话说，说完就停。"
-    "不要加别的话，不要解释原因，不要复述本指令。语气平稳、坚定，语速正常，"
+    "不要加别的话，不要解释原因，不要复述本指令。语气谦和、平稳，语速正常，"
     "每个字都念出来，岗位名称不要缩略（「总经理」不要念成「总理」）。"
 )
 OPENING_CUE_DEFAULT = (
@@ -399,44 +403,10 @@ def same_open_item(issue: str, reason: str, known: dict, now_ms: int) -> bool:
     return recent and shared_characters(issue, known.get("issue", "")) >= 0.5
 
 
-def spoken_open_item(owner: str, escalate_to: str) -> str:
-    """What the moderator says after recording an open item.
-
-    The escalation path is a phrase of its own ("提请总经理签批并留档"), so it
-    is not put behind "升级到": the model stumbled over that and was heard
-    saying 总理 for 总经理.
-    """
-    path = (escalate_to or "").strip().rstrip("。")
-    who = owner or "相关责任人"
-    sentence = f"这条今天定不了，记为未决事项，由{who}跟进。"
-    if not path:
-        return sentence
-    if path.startswith(("提请", "上报", "报", "提交", "交")) and "；" not in path:
-        return sentence + f"会后{path}。"
-    return sentence + f"升级路径是：{path}。"
-
-
 def spoken_summary(decisions: list[dict], open_items: list[dict]) -> str:
-    """The closing summary. Put together here and not by the model: the
-    numbers are right, and it is said in the prepared voice."""
-    parts = []
-    if decisions:
-        incomplete = [d for d in decisions if missing_decision_fields(d)]
-        parts.append(
-            f"本次会议共形成 {len(decisions)} 条决议，"
-            + (f"其中 {len(incomplete)} 条四要素还不齐全" if incomplete else "四要素齐全")
-        )
-    else:
-        parts.append("本次会议没有形成决议")
-    if open_items:
-        owners = list(dict.fromkeys(o.get("owner") for o in open_items if o.get("owner")))
-        parts.append(
-            f"另有 {len(open_items)} 条未决事项"
-            + (f"，由{'、'.join(owners)}跟进" if owners else "")
-        )
-    else:
-        parts.append("没有未决事项")
-    return "；".join(parts) + "。会议到此结束，谢谢各位。"
+    """The summary the chair asked for (wording in phrasebook.py)."""
+    incomplete = len([d for d in decisions if missing_decision_fields(d)])
+    return phrasebook_summary(decisions, open_items, incomplete)
 
 
 def create_summarize_meeting_tool(session_manager: SessionManager):
@@ -444,8 +414,8 @@ def create_summarize_meeting_tool(session_manager: SessionManager):
         "type": "function",
         "name": "summarize_meeting",
         "description": (
-            "会议收尾：向全场宣布已形成几条决议、还有几条未决事项。"
-            "有人要求做总结或结束会议时，或最后一项议题谈完时调用。"
+            "会议小结：向全场报告已记录几条决议、还有几条未决事项。"
+            "只在主持人或参会人明确要求你做总结时调用，不要因为议题谈完了就自己调用，也不要借此宣布散会。"
             "总结由系统宣布，你不要自己口头总结。"
         ),
         "parameters": {
@@ -471,16 +441,11 @@ def create_summarize_meeting_tool(session_manager: SessionManager):
     return summarize_meeting
 
 
-def spoken_open_item_owner(owner: str) -> str:
-    """Said when an open item was announced with somebody else to follow it up."""
-    return f"更正一下：这条未决事项由{owner}跟进。"
-
-
 def create_get_meeting_timer_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
         "name": "get_meeting_timer",
-        "description": "获取当前会议的已用时长、剩余时长、总计划时间、当前议题，以及本议题尚未点名表态的必须发言人、要素不全的决议清单。",
+        "description": "获取当前会议的已用时长、剩余时长、总计划时间、当前议题，以及要素不全的决议清单。",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -515,27 +480,17 @@ def create_get_meeting_timer_tool(session_manager: SessionManager):
                 f"会议已进行 {elapsed_mins}分{rem_secs}秒 (总预计 {total_mins} 分钟)。目前所有计划议程已讨论完毕。"
             )
 
-        pending = session_manager.pending_required_speakers()
-        if pending:
-            names = "、".join(
-                (a.get("name") or a.get("role") or "未具名") for a in pending
-            )
-            parts.append(
-                f"本议题还有 {len(pending)} 位【必须发言】人员尚未点名征询：{names}。"
-                f"请在推进议题前逐一点名（调用 request_speaker）——沉默不等于同意。"
-            )
-
         incomplete = session_manager.incomplete_decisions()
         if incomplete:
             details = "；".join(
                 f"「{d.get('decision', '')[:20]}」缺 {'、'.join(m)}" for d, m in incomplete
             )
             parts.append(
-                f"有 {len(incomplete)} 条决议要素不全：{details}。请当场追问补齐。"
+                f"有 {len(incomplete)} 条决议要素不全：{details}。只在主持人问起时才告诉他，不要自己去追问。"
             )
 
         if not session_manager.decisions_for_current_agenda() and not session_manager.open_items_for_current_agenda():
-            parts.append("当前议题尚未产生任何决议或未决事项，切勿让它空过。")
+            parts.append("当前议题还没有记录决议或未决事项。")
 
         return " ".join(parts)
 
@@ -546,7 +501,7 @@ def create_advance_agenda_tool(session_manager: SessionManager):
     raw_schema = {
         "type": "function",
         "name": "advance_agenda",
-        "description": "推进会议到下一项或指定项议程（序号从1开始），并在参会人前台看板同步推进状态。",
+        "description": "记录会议已推进到下一项或指定项议程（序号从1开始），并在前台看板同步。只在主持人或参会人明确说要进入下一项后调用；是否进入下一项由主持人决定。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -574,30 +529,16 @@ def create_advance_agenda_tool(session_manager: SessionManager):
             item_index = 1
         summary = raw_arguments.get("summary", "")
 
-        # 议而不决闸门：当前议题既无决议也无未决事项时，不允许直接翻页
+        # The chair decides when to move on. When the item that is left has
+        # neither a decision nor an open item, the assistant says so once.
         leaving_idx = session_manager.current_agenda_index
         target_idx = session_manager.clamp_agenda_index(item_index)
-        if target_idx > leaving_idx:
-            has_decision = bool(session_manager.decisions_for_current_agenda())
-            has_open = bool(session_manager.open_items_for_current_agenda())
-            if not has_decision and not has_open:
-                return (
-                    f"【暂不推进】议题【{session_manager.current_agenda_title()}】"
-                    f"至今没有任何决议，也没有登记未决事项，属于典型的「议而不决」。"
-                    f"请先追问拍板结论并调用 record_decision（须带齐 责任人/完成时限/验证方式/关闭证据）；"
-                    f"若确实定不下来，就调用 record_open_item 记为未决事项并说明升级路径，"
-                    f"然后再调用 advance_agenda 推进。"
-                )
-            pending = session_manager.pending_required_speakers()
-            if pending:
-                names = "、".join(
-                    (a.get("name") or a.get("role") or "未具名") for a in pending
-                )
-                return (
-                    f"【暂不推进】还有 {len(pending)} 位【必须发言】人员没有被点名征询：{names}。"
-                    f"请现在调用一次 request_speaker，把这几位一起点到（attendee_names），"
-                    f"听完表态后再调用 advance_agenda。"
-                )
+        left_without_outcome = (
+            target_idx > leaving_idx
+            and not session_manager.decisions_for_current_agenda()
+            and not session_manager.open_items_for_current_agenda()
+        )
+        left_title = session_manager.current_agenda_title()
 
         agendas = session_manager.meeting_agendas()
 
@@ -605,7 +546,6 @@ def create_advance_agenda_tool(session_manager: SessionManager):
         # announce the new item. The second call must not start the item over.
         if target_idx != leaving_idx:
             session_manager.current_agenda_index = target_idx
-            # 换议题即清空本议题的点名记录
             session_manager.called_attendee_ids = set()
             session_manager.on_agenda_changed()
 
@@ -627,10 +567,17 @@ def create_advance_agenda_tool(session_manager: SessionManager):
                 "已经宣布过就不要再宣布，继续听大家讨论。"
             )
         planned = f"，计划 {minutes} 分钟" if minutes else ""
+        if left_without_outcome:
+            reminder = spoken_no_outcome(
+                session_manager.chair_call(), leaving_idx + 1, left_title
+            )
+            return (
+                f"议程已更新至第 {target_idx + 1} 项{note}，看板已同步。"
+                f"不需要宣布新议题。只提醒一次：{SAY_EXACTLY}\n“{reminder}”"
+            )
         return (
-            f"议程已更新至第 {target_idx + 1} 项{note}，看板已同步。"
-            f"{SAY_EXACTLY}\n“现在进入第 {target_idx + 1} 项：「{title}」{planned}。"
-            f"{session_manager.first_words(target_idx)}”"
+            f"议程已更新至第 {target_idx + 1} 项「{title}」{planned}{note}，看板已同步。"
+            "不需要口头宣布，也不要说别的，保持静默。"
         )
 
     return advance_agenda
@@ -739,25 +686,15 @@ def create_record_decision_tool(session_manager: SessionManager):
             f"关闭证据：{decision_item['evidence'] or '缺'}），已同步至前台看板。"
         )
         if missing:
+            question = spoken_missing_elements(missing, session_manager.chair_call())
             return (
                 base
-                + f" 但该决议仍缺少四要素中的：{('、'.join(missing))}。"
-                f"请立即当场追问补齐，例如「这条由谁负责？什么时候完成？用什么方式验证？拿什么作为关闭证据？」，"
-                f"补齐后重新调用 record_decision 覆盖记录；若确实问不齐，改用 record_open_item 记为未决事项。"
+                + f" 但该决议仍缺少：{'、'.join(missing)}。"
+                "向主持人请示着问一句，补齐后重新调用 record_decision 覆盖记录；"
+                f"问过两轮仍问不齐，就改用 record_open_item 记为未决事项。{SAY_EXACTLY}\n“{question}”"
             )
         owner, due = decision_item["owner"], decision_item["dueDate"]
-        readback = f"已记录决议：{decision_text.rstrip('。')}。由{owner}负责，{due}完成。"
-        pending = session_manager.pending_required_speakers()
-        if pending:
-            names = "、".join(a.get("name") or a.get("role") or "" for a in pending)
-            # Said together with the roll call: asked to speak two tool
-            # answers in a row, the model drops the first one.
-            session_manager.unspoken_readback = readback
-            return (
-                base
-                + f" 四要素齐全。现在先不要开口，接着调用 request_speaker 点名还没表态的 {names}，"
-                "要说的话由它给出。"
-            )
+        readback = spoken_decision(decision_text, owner, due)
         return base + f" 四要素齐全。{SAY_EXACTLY}\n“{readback}”"
 
     return record_decision
@@ -854,7 +791,7 @@ def create_record_open_item_tool(session_manager: SessionManager):
         session_manager.prepare_summary()
         if not open_item["owner"]:
             # announced once somebody is named: "由相关责任人跟进" commits nobody
-            return recorded + f"还没有跟进人。{SAY_EXACTLY}\n“这条记为未决事项，由谁跟进？”"
+            return recorded + f"还没有跟进人。{SAY_EXACTLY}\n“{spoken_open_item_without_owner()}”"
         if open_item.get("announcedOwner") == open_item["owner"]:
             return recorded + "这一条已经向全场宣布过，不要再宣布，继续听大家讨论。"
         if session_manager.announce(session_manager.open_item_wording(open_item["id"])):
@@ -871,12 +808,10 @@ def create_request_speaker_tool(session_manager: SessionManager):
         "type": "function",
         "name": "request_speaker",
         "description": (
-            "点名。有两种用途，用 purpose 区分。"
-            "stance（表态）：议题有了结论或方案之后，征询参会人是否同意，前台看板会高亮被点到的人。"
-            "本公司参会人普遍不会主动表态，沉默不等于同意——议题收尾前必须点到所有【必须发言】人员。"
-            "一次调用把还没表态的人都点到，不要一人调用一次。"
-            "report（发言）：请某个人先介绍情况或说明看法。议题刚开始、还没有可以表态的内容时，"
-            "或者有人要求你指定发言人时，用这一种，只点最相关的一两位。"
+            "请某位参会人发言。不要主动、逐个地点名：只在主持人或参会人明确要你替主持人问某人、"
+            "或请某人介绍情况时才调用；沉默既不算同意也不算反对。"
+            "report（介绍情况）：请某个人先介绍情况或说明看法，只点最相关的一两位。"
+            "stance（征询意见）：议题有了结论或方案之后，应主持人要求征询某人的意见，前台看板会高亮被问到的人。"
         ),
         "parameters": {
             "type": "object",
@@ -893,11 +828,11 @@ def create_request_speaker_tool(session_manager: SessionManager):
                 "purpose": {
                     "type": "string",
                     "enum": ["stance", "report"],
-                    "description": "stance：对已有的结论或方案表态（默认）；report：请他先介绍情况、说明看法",
+                    "description": "stance：对已有的结论或方案征询意见（默认）；report：请他先介绍情况、说明看法",
                 },
                 "reason": {
                     "type": "string",
-                    "description": "点名征询的角度，只显示在看板上（如'从质量口径看是否接受该让步'）",
+                    "description": "征询的角度，只显示在看板上（如'从质量口径看是否接受该让步'）",
                 },
             },
             "additionalProperties": False,
@@ -935,11 +870,9 @@ def create_request_speaker_tool(session_manager: SessionManager):
             )
 
         if raw_arguments.get("purpose") == "report":
-            who = "、".join(a.get("name") or a.get("role") or "" for a in found[:2])
+            who = [call_name(a) for a in found[:2]]
             title = session_manager.current_agenda_title()
-            return (
-                f"{SAY_EXACTLY}\n“请{who}先说一下「{title}」的情况。”"
-            )
+            return f"{SAY_EXACTLY}\n“{spoken_report_request(who, title)}”"
 
         # A stance is a stance on a conclusion. Asked in the middle of the
         # discussion ("请王部长表个态"), it cuts the discussion short.
@@ -950,8 +883,7 @@ def create_request_speaker_tool(session_manager: SessionManager):
             title = session_manager.current_agenda_title()
             return (
                 f"议题「{title}」还没有结论：没有记录决议，也没有登记未决事项。"
-                "现在不要征询表态，也不要开口，继续听大家讨论。"
-                "有了结论先调用 record_decision 或 record_open_item，再来点名。"
+                "现在不要征询意见，也不要开口，继续听大家讨论。"
             )
 
         # There is nothing to agree to before somebody has said something
@@ -959,14 +891,14 @@ def create_request_speaker_tool(session_manager: SessionManager):
         if not session_manager.discussed_current_agenda():
             title = session_manager.current_agenda_title()
             return (
-                f"议题「{title}」还没有人发言，没有可以表态的内容，现在不能征询表态。"
-                "改为请人先介绍情况：再调用一次 request_speaker，purpose 填 report，"
+                f"议题「{title}」还没有人发言，没有可以征询意见的内容。"
+                "如果主持人要的是请人先介绍情况，再调用一次 request_speaker，purpose 填 report，"
                 "attendee_names 只填与本议题最相关的一位。"
             )
 
         labels = []
         for attendee in found:
-            label = attendee.get("name") or attendee.get("role") or ""
+            label = call_name(attendee)
             labels.append(label)
             session_manager.called_attendee_ids.add(attendee.get("id", ""))
             await session_manager.publish_meeting_data({
@@ -976,30 +908,10 @@ def create_request_speaker_tool(session_manager: SessionManager):
                 "reason": reason,
             })
 
-        remaining = session_manager.pending_required_speakers()
-        readback, session_manager.unspoken_readback = session_manager.unspoken_readback, ""
-        question = readback + (
-            f"请{labels[0]}表个态：同意，还是有不同意见？"
-            if len(labels) == 1
-            else f"请{'、'.join(labels)}依次表个态：同意，还是有不同意见？"
-        )
+        question = spoken_stance_request(labels)
         return (
-            f"已在看板高亮点名 {'、'.join(labels)}。"
-            + (
-                f"还有 {'、'.join(a.get('name') or a.get('role') or '' for a in remaining)} 没点到，"
-                "听完这几位的表态后接着点。"
-                if remaining
-                else (
-                    "本议题必须发言的人已全部点到。"
-                    + (
-                        f"这 {len(labels)} 位都表态之后才能调用 advance_agenda，"
-                        "只听到其中一位时继续等。"
-                        if len(labels) > 1
-                        else "听完表态即可推进议题。"
-                    )
-                )
-            )
-            + f"{SAY_EXACTLY}\n“{question}”"
+            f"已在看板高亮 {'、'.join(labels)}。听完回答后继续监听，"
+            f"不需要再去问别的人。{SAY_EXACTLY}\n“{question}”"
         )
 
     return request_speaker
@@ -1087,8 +999,6 @@ class SessionManager:
         self.decisions: list[dict] = []
         self.open_items: list[dict] = []
         self.called_attendee_ids: set[str] = set()
-        #: a decision that was recorded but not confirmed aloud yet
-        self.unspoken_readback: str = ""
         #: when the closing summary was last announced
         self.summarized_at = 0.0
         #: how much the room has said on the current item (characters)
@@ -1431,7 +1341,7 @@ class SessionManager:
             chat_ctx.add_message(
                 role="user",
                 content=(
-                    f"【系统提示】主持人刚才已经打断了跑题的发言，说的是：“{script}”"
+                    f"【系统提示】会议助手刚才已经提醒了跑题的发言，说的是：“{script}”"
                     "不要重复这句话，不要再调用 warn_topic_drift，继续监听。"
                 ),
             )
@@ -1474,7 +1384,7 @@ class SessionManager:
         idx = self.current_agenda_index
         title = agendas[idx].get("title", "") if 0 <= idx < len(agendas) else ""
         style = (self.current_config.meeting_config or {}).get("style", "strict")
-        return spoken_interruption(title, reason_code, style)
+        return spoken_interruption(title, reason_code, style, self.chair_call())
 
     def intervention_prompt(self, reason_code: str = "") -> str:
         return (
@@ -1489,18 +1399,10 @@ class SessionManager:
         if not (self.decisions_for_current_agenda() or self.open_items_for_current_agenda()):
             return None
         title = self.current_agenda_title()
-        pending = self.pending_required_speakers()
-        if pending:
-            names = "、".join(a.get("name") or a.get("role") or "" for a in pending)
-            return (
-                f"【推进指令】议题「{title}」已有结论，大家已经谈到别的议题，"
-                f"但 {names} 还没有表态。请现在调用 request_speaker 点到这几位，"
-                "照工具返回的原话说。不要调用 warn_topic_drift。"
-            )
         return (
             f"【推进指令】议题「{title}」已有结论，大家已经谈到别的议题。"
-            "请判断大家在谈议程里的哪一项，调用 advance_agenda 推进到那一项，"
-            "照工具返回的原话说。不要调用 warn_topic_drift。"
+            "请判断大家在谈议程里的哪一项，调用 advance_agenda 记录推进到那一项。"
+            "不需要口头宣布。不要调用 warn_topic_drift。"
         )
 
     async def publish_drift_warning(self, intervention: Intervention) -> None:
@@ -1551,7 +1453,7 @@ class SessionManager:
             await self.publish_drift_suggestion(
                 source="model", reason=reason, reason_code="", confidence=None
             )
-            return f"当前为半自动介入模式：已在看板上提示人类主持人，由其决定是否打断。{keep_quiet}"
+            return f"当前为提示主持人的模式：已在看板上提示主持人，由主持人决定是否请你开口。{keep_quiet}"
 
         intervention = self.gate.try_acquire("model")
         if intervention is None:
@@ -1809,7 +1711,7 @@ class SessionManager:
             chat_ctx.add_message(
                 role="user",
                 content=(
-                    "【系统提示】人类主持人撤销了你刚才的打断：那段讨论并没有跑题，是你判断有误。"
+                    "【系统提示】主持人撤销了你刚才的提醒：那段讨论并没有跑题，是你判断有误。"
                     "请保持静默，让发言人继续，不要道歉也不要解释；之后对同类内容放宽判断。"
                 ),
             )
@@ -1830,23 +1732,13 @@ class SessionManager:
         attendees = cfg.get("attendees", [])
         return attendees if isinstance(attendees, list) else []
 
+    def chair_call(self) -> str:
+        """How the assistant addresses the chair ("李总"; else the role)."""
+        return chair_name(self.current_config.meeting_config)
+
     def escalation_path(self) -> str:
         cfg = self.current_config.meeting_config or {}
         return cfg.get("escalationPath") or "提请总经理签批并留档"
-
-    def first_words(self, index: int) -> str:
-        """Who is to speak first on an agenda item. Without it an item starts
-        with everybody waiting for somebody else."""
-        agendas = self.meeting_agendas()
-        if not 0 <= index < len(agendas):
-            return ""
-        agenda = agendas[index]
-        presenter = (agenda.get("presenter") or "").strip()
-        who = presenter or "负责这项工作的同事"
-        title = agenda.get("title", "")
-        if index == 0:
-            return f"先谈第 1 项「{title}」，请{who}先介绍情况。"
-        return f"请{who}先介绍情况。"
 
     def current_agenda_title(self) -> str:
         agendas = self.meeting_agendas()
@@ -1907,14 +1799,6 @@ class SessionManager:
             if (nm and nm in needle) or (role and role in needle):
                 return a
         return None
-
-    def pending_required_speakers(self) -> list[dict]:
-        """Required attendees who have not been called on for this agenda yet."""
-        return [
-            a
-            for a in self.meeting_attendees()
-            if a.get("required") and a.get("id") not in self.called_attendee_ids
-        ]
 
     def incomplete_decisions(self) -> list[tuple[dict, list[str]]]:
         """Decisions missing any of the four mandatory elements."""
@@ -2475,13 +2359,10 @@ class SessionManager:
             await self.publish_meeting_data({"type": "meeting_ending", "active": False})
             return json.dumps({"success": True, "secondsLeft": int(left)})
 
-        # Greet the user (RPC endpoints are live by this point, so a participant
-        # clicking 立即纠偏 during the opening announcement is served correctly)
-        self.cue_model(
-            OPENING_CUE_MEETING.format(first_words=self.first_words(0))
-            if self.current_config.meeting_config
-            else OPENING_CUE_DEFAULT
-        )
+        # The assistant does not open a meeting: the chair does. Without a
+        # meeting there is nobody to wait for, and it greets as before.
+        if not self.current_config.meeting_config:
+            self.cue_model(OPENING_CUE_DEFAULT)
 
     @utils.log_exceptions(logger=logger)
     async def replace_session(self, ctx: JobContext, participant: rtc.RemoteParticipant, config: SessionConfig, old_config: SessionConfig):

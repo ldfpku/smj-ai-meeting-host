@@ -3,7 +3,6 @@ from intervention import (
     UNDO_COOLDOWN_FACTOR,
     InterventionGate,
     InterventionSettings,
-    spoken_interruption,
 )
 
 
@@ -106,7 +105,7 @@ def test_settings_tolerate_bad_input():
             "consecutiveHits": "abc",
         }
     )
-    assert settings.mode == "auto"
+    assert settings.mode == "semi_auto"
     assert settings.threshold == 0.99
     assert settings.cooldown_seconds == 5.0
     assert settings.consecutive_hits == 1
@@ -122,38 +121,3 @@ def test_settings_tolerate_bad_input():
         "cooldownSeconds": 60.0,
         "consecutiveHits": 2,
     }
-
-
-# ---- what the moderator says ------------------------------------------------
-
-
-def test_the_interruption_is_two_short_sentences():
-    text = spoken_interruption("3 号机良率下降", "unrelated_chitchat")
-
-    assert text == "各位，先停一下。这个话题我们会后再聊，现在先回到「3 号机良率下降」。"
-    assert text.count("。") == 2
-
-
-def test_every_reason_and_style_stays_short_and_names_the_topic():
-    title = "3 号注塑机良率下降原因分析"
-    reasons = ("unrelated_chitchat", "other_agenda_item", "side_issue", "argument", "")
-    for style in ("strict", "gentle", "concise"):
-        for reason in reasons:
-            text = spoken_interruption(title, reason, style)
-            assert f"「{title}」" in text
-            # about 5 characters a second: under 10 seconds with a long title
-            assert len(text) <= 50, text
-
-
-def test_the_style_changes_the_first_words():
-    assert spoken_interruption("排产", style="gentle").startswith("不好意思，打断一下。")
-    assert spoken_interruption("排产", style="concise") == "请先回到「排产」。"
-    # a style saved by another build falls back to the default
-    assert spoken_interruption("排产", style="?").startswith("各位，先停一下。")
-
-
-def test_an_unknown_reason_and_a_missing_title_still_make_a_sentence():
-    assert (
-        spoken_interruption("", "whatever")
-        == "各位，先停一下。这个话题先放一放，现在先回到当前议题。"
-    )

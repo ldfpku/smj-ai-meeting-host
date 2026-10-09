@@ -49,7 +49,7 @@ interface MeetingAlertsProps {
   onOpenPreviousSession: () => void;
 }
 
-/** 会议区上方的提示条：跑题打断、半自动建议、议题超时、上一场会议记录。 */
+/** 会议区上方的提示条：跑题提醒、先提示主持人的建议、议题超时、上一场会议记录。 */
 export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
   const {
     meetingLiveState,
@@ -66,7 +66,7 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
   const [, forceTick] = useState(0);
   const mutedUntilRef = useRef(0);
 
-  // 主持人有两条音轨：实时模型的声音，和直接播放的打断语音。两条都要管到。
+  // 主持人有两条音轨：实时模型的声音，和直接播放的提醒语音。两条都要管到。
   const setAgentVolume = (volume: number) => {
     const publications = agent
       ? Array.from(agent.audioTrackPublications.values())
@@ -135,7 +135,7 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
     // 先在本机静音，再通知 agent：不等网络往返
     mutedUntilRef.current = Date.now() + UNDO_MUTE_MAX_MS;
     setAgentVolume(0);
-    // 打断语音不经过实时模型，主持人的状态不会变化，不能只靠状态变化来恢复音量
+    // 提醒语音不经过实时模型，会议助手的状态不会变化，不能只靠状态变化来恢复音量
     setTimeout(() => {
       if (mutedUntilRef.current && Date.now() >= mutedUntilRef.current) {
         mutedUntilRef.current = 0;
@@ -150,13 +150,13 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
     });
     if (result?.success) {
       toast({
-        title: "已撤销本次打断",
-        description: "已记为一次误判；主持人会在一段时间内不再自动打断。",
+        title: "已撤销本次提醒",
+        description: "已记为一次误判；会议助手会在一段时间内不再自动提醒。",
       });
     } else if (result) {
       toast({
-        title: "这次打断已经结束",
-        description: result.error || "没有可撤销的打断。",
+        title: "这次提醒已经结束",
+        description: result.error || "没有可撤销的提醒。",
       });
     }
   };
@@ -195,12 +195,12 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
   const handleForceIntervene = async () => {
     playAttentionChime();
     const result = await callAgent("pg.forceIntervene", {
-      reason: "参会人手动呼叫主持人介入纠偏",
+      reason: "参会人请会议助手提醒回到议题",
     });
     if (result?.success) {
       toast({
-        title: "已呼叫主持人即刻介入",
-        description: "AI 主持人将打断发言并收拢全场讨论。",
+        title: "已请会议助手提醒",
+        description: "会议助手会向主持人请示，把讨论请回当前议题。",
       });
     }
   };
@@ -282,7 +282,7 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
             {seconds(driftAlert.speechStartMs ?? driftAlert.latencyMs) && (
               <span
                 className="text-[11px] opacity-80 tabular-nums"
-                title="从最后一句发言到主持人开口（尚未开口时为到本提示出现）的耗时"
+                title="从最后一句发言到会议助手开口（尚未开口时为到本提示出现）的耗时"
               >
                 响应 {seconds(driftAlert.speechStartMs ?? driftAlert.latencyMs)}
               </span>
@@ -294,10 +294,10 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
               variant="outline"
               className="h-6 px-2.5 text-xs gap-1 border-amber-600/50 bg-transparent hover:bg-amber-500/10"
               onClick={handleUndo}
-              title="不该打断：立即停止主持人的发言，让发言人继续"
+              title="不该提醒：立即停止会议助手的发言，让发言人继续"
             >
               <Undo2 className="w-3 h-3" />
-              撤销打断
+              撤销提醒
             </Button>
             <button
               onClick={() => updateMeetingLiveState({ driftAlert: null })}
@@ -322,7 +322,7 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
             <span className="text-[11px] opacity-80">
               {driftSourceLabels[driftSuggestion.source] ??
                 driftSuggestion.source}
-              　·　半自动模式，等待你决定
+              　·　先提示主持人，等你决定
             </span>
             {typeof driftSuggestion.confidence === "number" && (
               <span className="text-[11px]">
@@ -337,7 +337,7 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
               onClick={handleConfirmSuggestion}
             >
               <Zap className="w-3 h-3" />
-              打断并引导
+              请会议助手提醒
             </Button>
             <button
               onClick={handleDismissSuggestion}
@@ -362,10 +362,10 @@ export function MeetingAlerts({ onOpenPreviousSession }: MeetingAlertsProps) {
               variant="outline"
               className="h-6 px-2.5 text-xs gap-1 border-blue-500/40 bg-transparent hover:bg-blue-500/10"
               onClick={handleForceIntervene}
-              title="让 AI 主持人开口收拢讨论"
+              title="请会议助手向主持人请示，把讨论请回议题"
             >
               <Zap className="w-3 h-3" />
-              呼叫主持人收拢
+              请会议助手提醒
             </Button>
             <button
               onClick={() => updateMeetingLiveState({ overtimeAlert: null })}

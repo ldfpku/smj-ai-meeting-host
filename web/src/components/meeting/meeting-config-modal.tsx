@@ -38,6 +38,7 @@ import {
   SMJ_ROLES,
   getRolesByDept,
 } from "@/data/smj-org";
+import { withCallNames } from "@/data/honorifics";
 import { usePlaygroundState } from "@/hooks/use-playground-state";
 import { MeetingImport } from "@/components/meeting/meeting-import";
 import type { ImportedMeeting } from "@/lib/meeting-import";
@@ -65,6 +66,7 @@ export function MeetingConfigModal({
   const [meetingType, setMeetingType] = useState(initialConfig.meetingType || "");
   const [topic, setTopic] = useState(initialConfig.topic);
   const [chair, setChair] = useState(initialConfig.chair || "");
+  const [chairName, setChairName] = useState(initialConfig.chairName || "");
   const [style, setStyle] = useState<MeetingStyle>(initialConfig.style);
   const [requirePreRead, setRequirePreRead] = useState(
     !!initialConfig.requirePreRead
@@ -104,6 +106,7 @@ export function MeetingConfigModal({
     setMeetingType(cfg.meetingType || "");
     setTopic(cfg.topic);
     setChair(cfg.chair || "");
+    setChairName("");
     setStyle(cfg.style);
     setRequirePreRead(!!cfg.requirePreRead);
     setEscalationPath(cfg.escalationPath || "");
@@ -118,6 +121,7 @@ export function MeetingConfigModal({
     setMeetingType(meeting.meetingType || "");
     setTopic(meeting.topic);
     setChair(meeting.chair || "");
+    setChairName("");
     setStyle(meeting.style || "strict");
     setRequirePreRead(!!meeting.requirePreRead);
     setEscalationPath(meeting.escalationPath || "");
@@ -178,11 +182,12 @@ export function MeetingConfigModal({
       (a) => a.name.trim() || a.role.trim()
     );
 
-    const updatedConfig: MeetingConfig = {
+    const updatedConfig: MeetingConfig = withCallNames({
       templateId: templateId || undefined,
       meetingType: meetingType.trim() || undefined,
       topic: topic.trim(),
       chair: chair.trim() || undefined,
+      chairName: chairName.trim() || undefined,
       totalDurationMinutes: totalMinutes,
       agendas,
       attendees: cleanedAttendees,
@@ -190,7 +195,7 @@ export function MeetingConfigModal({
       requirePreRead,
       escalationPath: escalationPath.trim() || undefined,
       intervention,
-    };
+    });
 
     dispatch({
       type: "SET_SESSION_CONFIG",
@@ -224,7 +229,7 @@ export function MeetingConfigModal({
             <div>
               <DialogTitle className="text-xl">会议配置</DialogTitle>
               <DialogDescription>
-                从会议文档导入、选择公司标准会议模板，或自定义议程与参会人。主持人将依此控时、点名、催办决议。
+                从会议文档导入、选择公司标准会议模板，或自定义议程与参会人。会议助手将依此协助主持人控时、提示跑题、记录决议。
               </DialogDescription>
             </div>
           </div>
@@ -275,7 +280,7 @@ export function MeetingConfigModal({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="chair">主持人（岗位）</Label>
+              <Label htmlFor="chair">主持人（岗位 / 姓名）</Label>
               <select
                 id="chair"
                 className={`${selectClass} h-10 text-sm`}
@@ -292,6 +297,13 @@ export function MeetingConfigModal({
                   <option value={chair}>{chair}</option>
                 )}
               </select>
+              <Input
+                id="chair-name"
+                value={chairName}
+                onChange={(e) => setChairName(e.target.value)}
+                placeholder="姓名，会议助手据此称呼，如“李总”"
+                className="h-8 text-xs"
+              />
             </div>
             <div className="space-y-2">
               <Label>预计总时长</Label>
@@ -327,12 +339,12 @@ export function MeetingConfigModal({
 
           {/* 主持风格 */}
           <div className="space-y-2">
-            <Label>主持人控场风格</Label>
+            <Label>提示力度</Label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { id: "strict", label: "果断控场型", desc: "一跑题就打断并拉回" },
-                { id: "gentle", label: "温和引导型", desc: "委婉提醒、建议式推进" },
-                { id: "concise", label: "极简报时型", desc: "仅关键节点短小报时" },
+                { id: "strict", label: "积极", desc: "一跑题就向主持人请示着提醒" },
+                { id: "gentle", label: "标准", desc: "持续跑题才提醒，平时提示时间与目标" },
+                { id: "concise", label: "精简", desc: "只在关键节点短小报时" },
               ].map((s) => (
                 <button
                   key={s.id}
@@ -353,18 +365,18 @@ export function MeetingConfigModal({
 
           {/* 跑题介入设置 */}
           <div className="space-y-2">
-            <Label>跑题介入</Label>
+            <Label>跑题时怎么处理</Label>
             <div className="grid grid-cols-2 gap-2">
               {[
                 {
-                  id: "auto",
-                  label: "自动打断",
-                  desc: "检测到跑题，AI 主持人直接开口打断",
+                  id: "semi_auto",
+                  label: "先提示主持人",
+                  desc: "只在看板上提示，由主持人点击后会议助手才开口",
                 },
                 {
-                  id: "semi_auto",
-                  label: "半自动",
-                  desc: "只在看板上提示，由你点击后才打断",
+                  id: "auto",
+                  label: "直接提醒",
+                  desc: "检测到跑题，会议助手向主持人请示着直接开口提醒",
                 },
               ].map((m) => (
                 <button
@@ -428,7 +440,7 @@ export function MeetingConfigModal({
                   aria-label="冷却时间"
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  打断一次后，这段时间内不再自动打断。
+                  提醒一次后，这段时间内不再自动提醒。
                 </p>
               </div>
               <div className="space-y-2">
@@ -462,8 +474,8 @@ export function MeetingConfigModal({
                   参会人名单 ({attendees.length})
                 </Label>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  勾选【必须发言】的人，主持人会在议题收尾前逐一点名征询——沉默不等于同意。
-                  当前 {requiredCount} 人必须发言。
+                  勾选【重点征询】的人，是主持人希望听到意见的人；会议助手不会逐一点名，
+                  也不会因此拦住议程，只在主持人要求协助征询时参考。当前 {requiredCount} 人重点征询。
                 </p>
               </div>
               <Button
@@ -536,7 +548,7 @@ export function MeetingConfigModal({
                     </select>
                     <label
                       className="col-span-2 flex items-center gap-1.5 text-[11px] cursor-pointer"
-                      title="议题收尾前必须点名征询其意见"
+                      title="主持人希望听到这个人的意见（不会逐一点名，也不拦议程）"
                     >
                       <Checkbox
                         checked={a.required}
@@ -544,7 +556,7 @@ export function MeetingConfigModal({
                           handleUpdateAttendee(a.id, { required: !!v })
                         }
                       />
-                      <span>必须发言</span>
+                      <span>重点征询</span>
                     </label>
                     <Button
                       type="button"

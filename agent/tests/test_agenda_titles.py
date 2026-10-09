@@ -106,8 +106,8 @@ def test_the_interruption_cue_carries_the_exact_words():
 
     assert cue.startswith("【打断指令】")
     assert (
-        "“不好意思，打断一下。这一点先不争了，"
-        "现在先回到「3 号注塑机良率下降原因分析」，把结论定下来。”" in cue
+        "“不好意思，打扰一下，主持人，这一点是否先放一放？"
+        "咱们先回到「3 号注塑机良率下降原因分析」，把结论定下来。”" in cue
     )
     # the goal of the agenda item is not read aloud any more
     assert "确定根因" not in cue
@@ -133,11 +133,18 @@ def test_a_settled_item_asks_to_move_on_instead_of_interrupting():
     assert prompt.startswith("【推进指令】")
     assert "advance_agenda" in prompt
 
-    manager.current_config.meeting_config["attendees"] = [
-        {"id": "a", "name": "王部长", "required": True},
-        {"id": "b", "name": "李工", "required": True},
-    ]
-    manager.called_attendee_ids = {"a"}
-    prompt = manager.move_on_prompt()
-    assert "李工" in prompt and "王部长" not in prompt
-    assert "request_speaker" in prompt
+    # nobody is chased for a statement any more: the cue only moves the agenda
+    assert "request_speaker" not in prompt
+    assert "不需要口头宣布" in prompt
+
+
+def test_the_chair_is_addressed_by_the_name_the_web_app_worked_out():
+    manager = make_manager()
+    assert manager.chair_call() == "主持人"
+
+    manager.current_config.meeting_config["chair"] = "总经理"
+    assert manager.chair_call() == "总经理"
+
+    manager.current_config.meeting_config["chairCallName"] = "李总"
+    assert manager.chair_call() == "李总"
+    assert "李总，这一点是否先放一放？" in manager.intervention_prompt("argument")

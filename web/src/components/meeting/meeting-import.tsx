@@ -155,7 +155,7 @@ export function MeetingImport({
       <p className="text-[11px] text-muted-foreground leading-relaxed">
         支持 md、docx、txt 格式的会议通知或议程。AI
         读出会议名称、参会人和议题后填到下面，覆盖当前内容；核对无误再点「确认并保存」。
-        文件在本机读取，只把文字发给公司 AI 网关整理。
+        文件在本机读取，只把文字发给 Cloudflare Workers AI 整理。
       </p>
 
       {pasting && (

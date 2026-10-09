@@ -11,10 +11,10 @@ export function Header() {
           <div className="flex flex-row items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold">
-                AI 会议主持人
+                会议助手
               </h2>
               <p className="text-sm text-gray-500">
-                装载公司标准会议模板，控时、纠偏、点名征询、催办四要素决议。
+                装载公司标准会议模板，协助主持人控时、提示跑题、记录决议。
               </p>
             </div>
           </div>

@@ -67,7 +67,7 @@ export function ConnectButton() {
           ) : (
             <>
               <PhoneCall className="h-4 w-4 mr-2" />
-              开始与主持人对话
+              开始与会议助手对话
             </>
           )}
         </Button>

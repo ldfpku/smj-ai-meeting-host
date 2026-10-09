@@ -399,7 +399,8 @@ export function templateToConfig(template: MeetingTemplate): MeetingConfig {
     name: "",
     dept: "",
     role,
-    required: true,
+    // 重点征询由组织者按需勾选，不再默认要求每个人表态
+    required: false,
   }));
 
   return {

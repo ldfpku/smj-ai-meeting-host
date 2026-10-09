@@ -42,7 +42,7 @@ function attendeeLines(config: MeetingConfig): string[] {
       [a.name.trim(), a.role.trim()].filter(Boolean).join("（") +
       (a.name.trim() && a.role.trim() ? "）" : "");
     const marks: string[] = [];
-    if (a.required) marks.push("必须发言");
+    if (a.required) marks.push("重点征询");
     byDept.set(dept, [
       ...(byDept.get(dept) || []),
       who + (marks.length ? ` [${marks.join("/")}]` : ""),
@@ -143,7 +143,11 @@ export function generateMinutesMarkdown({
   lines.push(`| 会议类型 | ${config.meetingType || "—"} |`);
   lines.push(`| 时间 | ${fmtDateTime(now)} |`);
   lines.push(`| 地点 | （待填写） |`);
-  lines.push(`| 主持人 | ${config.chair || "（待填写）"} |`);
+  const chairText = config.chairName?.trim()
+    ? `${config.chairName.trim()}${config.chair ? `（${config.chair}）` : ""}`
+    : config.chair || "（待填写）";
+  lines.push(`| 主持人 | ${chairText} |`);
+  lines.push(`| 记录 | 会议助手（AI 记录，请主持人确认） |`);
   lines.push(
     `| 计划时长 / 实际用时 | ${config.totalDurationMinutes} 分钟 / ${fmtDuration(
       elapsedSeconds

@@ -139,7 +139,7 @@ export function MeetingKanban({
     if (!room?.localParticipant || !agent?.identity) {
       toast({
         title: "主持人尚未就位",
-        description: "AI 主持人还没有连接到会议，请稍候重试。",
+        description: "会议助手还没有连接到会议，请稍候重试。",
         variant: "destructive",
       });
       return false;
@@ -155,7 +155,7 @@ export function MeetingKanban({
       console.error(`${method} RPC failed`, err);
       toast({
         title: "指令未送达主持人",
-        description: "AI 主持人未响应本次操作，请重试。",
+        description: "会议助手未响应本次操作，请重试。",
         variant: "destructive",
       });
       return false;
@@ -211,12 +211,12 @@ export function MeetingKanban({
   const handleForceIntervene = async () => {
     playAttentionChime();
     const ok = await callAgent("pg.forceIntervene", {
-      reason: "参会人手动呼叫主持人介入纠偏",
+      reason: "参会人请会议助手提醒回到议题",
     });
     if (ok) {
       toast({
-        title: "已呼叫主持人即刻介入",
-        description: "AI 主持人会打断发言，把讨论拉回当前议题。",
+        title: "已请会议助手提醒",
+        description: "会议助手会向主持人请示，把讨论请回当前议题。",
       });
     }
   };
@@ -243,11 +243,11 @@ export function MeetingKanban({
       payload: { meetingConfig: { ...config, intervention: next } },
     });
     toast({
-      title: mode === "auto" ? "已切换为自动打断" : "已切换为半自动",
+      title: mode === "auto" ? "已切换为直接提醒" : "已切换为先提示主持人",
       description:
         mode === "auto"
-          ? "检测到跑题时，AI 主持人会直接打断。"
-          : "检测到跑题时只在看板上提示，由你决定是否打断。",
+          ? "检测到跑题时，会议助手会向主持人请示着直接开口提醒。"
+          : "检测到跑题时只在看板上提示，由主持人决定要不要请会议助手开口。",
     });
   };
 
@@ -428,8 +428,8 @@ export function MeetingKanban({
             value={intervention.mode}
             onValueChange={handleModeChange}
             options={[
-              { value: "auto", label: "自动打断" },
-              { value: "semi_auto", label: "半自动" },
+              { value: "semi_auto", label: "先提示主持人" },
+              { value: "auto", label: "直接提醒" },
             ]}
             className="w-[168px]"
           />
@@ -441,8 +441,8 @@ export function MeetingKanban({
             liveState.detectorActive
               ? `Jev 每隔约 1 秒判断一次最近的发言。偏题概率达到 ${Math.round(
                   intervention.threshold * 100
-                )}% 即${intervention.mode === "auto" ? "打断" : "提示"}。`
-              : "agent 未配置 JEV_API_KEY：跑题只靠 AI 主持人自行判断，没有置信度读数。"
+                )}% 即${intervention.mode === "auto" ? "提醒" : "提示"}。`
+              : "agent 未配置 JEV_API_KEY：跑题只靠 会议助手自行判断，没有置信度读数。"
           }
         >
           <Radar className="w-3.5 h-3.5 flex-shrink-0" />
@@ -496,10 +496,10 @@ export function MeetingKanban({
               variant="outline"
               onClick={handleForceIntervene}
               className="h-6 px-2 text-xs text-amber-600 dark:text-amber-400 border-amber-500/40 hover:bg-amber-500/10 gap-1 font-medium"
-              title="当讨论跑题或长篇大论时，立即呼叫AI主持人强势打断介入"
+              title="讨论跑题或长篇大论时，请会议助手向主持人请示，把讨论请回议题"
             >
               <Zap className="w-3 h-3 text-amber-500 fill-amber-500" />
-              立即纠偏
+              请会议助手提醒
             </Button>
             <Button
               size="sm"
@@ -538,20 +538,20 @@ export function MeetingKanban({
         </div>
       </div>
 
-      {/* 点名发言：沉默不等于同意 */}
+      {/* 重点征询：只给主持人看，不拦议程 */}
       {requiredAttendees.length > 0 && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs font-semibold">
             <div className="flex items-center gap-1.5">
               <Megaphone className="w-3.5 h-3.5 text-violet-500" />
               <span>
-                本议题表态 ({requiredAttendees.length - pendingSpeakers.length}/
+                重点征询 ({requiredAttendees.length - pendingSpeakers.length}/
                 {requiredAttendees.length})
               </span>
             </div>
             {pendingSpeakers.length > 0 && (
               <span className="text-[10px] font-normal text-violet-600 dark:text-violet-400">
-                沉默不等于同意
+                待听取意见
               </span>
             )}
           </div>
@@ -567,10 +567,10 @@ export function MeetingKanban({
                   onClick={() => onToggleSpoken?.(a.id)}
                   title={
                     spoken
-                      ? "已表态（点击撤销）"
+                      ? "已发言（点击撤销）"
                       : called
-                      ? "主持人已点名，等待表态（点击标记为已表态）"
-                      : "尚未表态（点击标记为已表态）"
+                      ? "已请这位发言，等待回应（点击标记为已发言）"
+                      : "尚未发言（点击标记为已发言）"
                   }
                   className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
                     spoken
@@ -680,7 +680,7 @@ export function MeetingKanban({
         <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
           {liveState.decisions.length === 0 ? (
             <div className="text-center py-4 text-xs text-muted-foreground/60 border border-dashed rounded-lg">
-              讨论形成结论后，AI 主持人将自动记录上墙...
+              讨论形成结论后，会议助手将自动记录上墙...
             </div>
           ) : (
             liveState.decisions.map((dec) => {

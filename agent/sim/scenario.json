@@ -13,14 +13,14 @@
         "name": "王部长",
         "dept": "生产制造部",
         "role": "部长",
-        "required": true
+        "required": false
       },
       {
         "id": "at-li",
         "name": "李工",
         "dept": "设备科",
         "role": "设备工程师",
-        "required": true
+        "required": false
       },
       {
         "id": "at-zhang",
@@ -52,31 +52,30 @@
       }
     ],
     "intervention": {
-      "mode": "auto",
+      "mode": "semi_auto",
       "threshold": 0.85,
       "cooldownSeconds": 45,
       "consecutiveHits": 1
-    }
+    },
+    "chairName": "王建国"
   },
-  "pronounce": ["总经理", "温控器"],
+  "pronounce": [
+    "总经理",
+    "温控器"
+  ],
   "voices": {
     "王部长": "Charon",
     "李工": "Orus",
     "张经理": "Kore",
     "陈主管": "Puck"
   },
-  "answers": {
-    "a1": {
-      "王部长": "我同意这个方案，没有不同意见。",
-      "李工": "我同意，周五下班前我把温控器换好。"
-    },
-    "a2": {
-      "王部长": "我同意记为未决事项，没有其他意见。",
-      "李工": "我也同意，没有意见。"
-    },
-    "default": "我同意，没有不同意见。"
-  },
   "steps": [
+    {
+      "id": "invite",
+      "say": "王部长",
+      "text": "好，现在开会。请会议助手先播报一下今天的议程。",
+      "then": "reply"
+    },
     {
       "id": "problem",
       "say": "王部长",
@@ -93,7 +92,7 @@
       "id": "off_topic",
       "say": "陈主管",
       "text": "说到这个，下个月公司团建大家想去哪里啊？我觉得去海边不错，可以吃海鲜，上次那家餐厅的螃蟹特别好吃。对了，你们看昨天晚上的球赛了吗，最后那个进球太精彩了，我到现在还在回味。",
-      "expect": "interrupt",
+      "expect": "suggest",
       "then": "reply"
     },
     {
@@ -105,10 +104,10 @@
     {
       "id": "close_1",
       "say": "王部长",
-      "text": "第一个议题就这样定了，请主持人推进到下一个议题。",
+      "text": "第一个议题就这样定了，我们进入下一个议题。",
       "then": "reply",
       "until": "advance",
-      "retry": "请主持人推进到下一个议题。"
+      "retry": "好，进入下一个议题。"
     },
     {
       "id": "plan",
@@ -125,7 +124,7 @@
     {
       "id": "wrap_up",
       "say": "王部长",
-      "text": "今天的议题都讨论完了，请主持人做个总结，然后结束会议。",
+      "text": "今天的议题都讨论完了，请会议助手做个小结。",
       "then": "reply"
     }
   ]

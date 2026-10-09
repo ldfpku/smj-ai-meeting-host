@@ -43,7 +43,7 @@ interface Transcription {
 /** 转写面板与纪要生成用的一条记录 */
 export interface TranscriptEntry {
   id: string;
-  /** moderator：AI 主持人；room：会场（暂不区分具体发言人） */
+  /** moderator：会议助手；room：会场（暂不区分具体发言人） */
   role: "moderator" | "room";
   text: string;
   final: boolean;

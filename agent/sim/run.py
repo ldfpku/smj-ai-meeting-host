@@ -2,8 +2,9 @@
 
 Several people (one synthetic voice each) talk into the one microphone of a
 meeting room, the way the product is used. The script only speaks; everything
-the moderator does (interrupting, recording decisions, roll call, moving on,
-closing) has to happen on its own. Afterwards the minutes are generated and a
+the assistant does (prompting the chair, recording decisions, noting that the
+agenda moved on, the summary) has to happen on its own, and what it must NOT do
+(open the meeting, call people one by one) is checked too. Afterwards the minutes are generated and a
 report lists what went wrong.
 
     cd agent
@@ -146,11 +147,27 @@ def hear(pcm: bytes, rate: int) -> str:
     return "".join(texts).strip()
 
 
+def with_call_names(config: dict) -> dict:
+    """The web app adds the call names (李总, 王部长) when the configuration is
+    saved; the simulation has to do the same, with the real code."""
+    out = run_node(
+        "const [dir, file] = process.argv.slice(1);"
+        "const h = require(dir + '/honorifics.js');"
+        "const c = JSON.parse(require('fs').readFileSync(file, 'utf8'));"
+        "process.stdout.write(JSON.stringify(h.withCallNames(c)));",
+        config,
+    )
+    return json.loads(out)
+
+
 def compile_web_data() -> Path:
     """The moderator prompt and the minutes template live in the web app
     (TypeScript). They are compiled once so the simulation uses the real ones."""
     out = CACHE / "js"
-    sources = [ROOT / "web/src/data" / n for n in ("meeting.ts", "meeting-minutes.ts")]
+    sources = [
+        ROOT / "web/src/data" / n
+        for n in ("meeting.ts", "meeting-minutes.ts", "honorifics.ts")
+    ]
     newest = max(p.stat().st_mtime for p in (ROOT / "web/src/data").glob("*.ts"))
     built = out / "meeting-minutes.js"
     if not built.exists() or built.stat().st_mtime < newest:
@@ -292,7 +309,7 @@ class Ear:
 class Meeting:
     def __init__(self, scenario: dict, model: str, agent_name: str):
         self.scenario = scenario
-        self.config = scenario["config"]
+        self.config = with_call_names(scenario["config"])
         self.model = model
         self.agent_name = agent_name
         self.room = rtc.Room()
@@ -306,7 +323,7 @@ class Meeting:
         self.agenda_index = 0
         self.tasks: list[asyncio.Task] = []
         self.steps: list[dict] = []
-        self.answered = 0
+        self.chair_confirms = False
         self.heard: list[dict] = []
 
     # -- connection
@@ -441,7 +458,28 @@ class Meeting:
             return
         if kind == "advance_agenda":
             self.agenda_index = data.get("currentAgendaIndex", self.agenda_index)
+        if kind == "drift_suggestion" and self.chair_confirms:
+            self.chair_confirms = False
+            self.tasks.append(asyncio.create_task(self.confirm_as_chair(dict(data))))
         log(f"update:{kind}", **data)
+
+    async def confirm_as_chair(self, suggestion: dict):
+        """The chair clicks 请会议助手提醒 on the board: the same RPC as the button."""
+        log("chair_confirms", suggestion=suggestion.get("suggestionId"))
+        try:
+            await self.room.local_participant.perform_rpc(
+                destination_identity=self.agent_identity,
+                method="pg.forceIntervene",
+                payload=json.dumps(
+                    {
+                        "suggestionId": suggestion.get("suggestionId"),
+                        "reason": suggestion.get("reason"),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as e:  # noqa: BLE001
+            log("chair_confirm_failed", error=repr(e))
 
     # -- speaking and waiting
 
@@ -488,56 +526,32 @@ class Meeting:
             if s["role"] == "moderator" and s["t"] >= t
         )
 
-    async def answer_roll_calls(self):
-        """Whoever the moderator called on answers, like people in a room do."""
-        for _ in range(4):
-            calls = [e for e in events if e["kind"] == "update:roll_call"]
-            waiting = calls[self.answered :]
-            if not waiting:
-                return
-            self.answered = len(calls)
-            # the board lights up before the moderator has asked the question
-            await self.wait_reply(min_wait=2.0)
-            agenda = self.config["agendas"][self.agenda_index]["id"]
-            for call in waiting:
-                name = call.get("attendeeName", "")
-                if name not in self.scenario["voices"]:
-                    continue
-                answers = self.scenario["answers"]
-                text = answers.get(agenda, {}).get(name) or answers["default"]
-                await self.say(name, text, f"answer:{agenda}")
-                await asyncio.sleep(0.6)
-            await self.wait_reply()
-
     async def floor_to_moderator(self):
         await self.wait_reply()
-        await self.answer_roll_calls()
 
     async def run(self):
-        # the opening announcement
-        for _ in range(250):
-            if self.ear.speaking:
-                break
-            await asyncio.sleep(0.1)
-        await self.wait_reply(min_wait=2.0, max_wait=60)
-        log("opening_done")
+        # the assistant does not open a meeting: a few quiet seconds first
+        await asyncio.sleep(6)
+        log("quiet_opening_done")
 
         for step in self.scenario["steps"]:
             record = {"id": step["id"], "start": now(), "expect": step.get("expect")}
             self.steps.append(record)
             agenda_before = self.agenda_index
             if step.get("until") == "advance" and agenda_before > 0:
-                # the moderator moved on by itself: nobody needs to ask
+                # the agenda has moved on: nobody needs to ask
                 record["skipped"] = True
                 record["end"] = now()
                 log("step_skipped", step=step["id"])
                 continue
+            self.chair_confirms = step.get("expect") == "suggest"
             record["yielded_at"] = await self.say(
                 step["say"],
                 step["text"],
                 step["id"],
-                yields=step.get("expect") == "interrupt",
+                yields=step.get("expect") in ("suggest", "interrupt"),
             )
+            self.chair_confirms = False
             record["speech_end"] = now()
             if step.get("then") == "reply":
                 await self.floor_to_moderator()
@@ -553,7 +567,7 @@ class Meeting:
         # the closing summary is announced by the system, a moment later
         asked = self.steps[-1]["start"] if self.steps else now()
         for _ in range(200):
-            if "会议到此结束" in self.moderator_text_since(asked):
+            if "请主持人确认" in self.moderator_text_since(asked):
                 await self.wait_reply(min_wait=1.0)
                 break
             await asyncio.sleep(0.1)
@@ -601,50 +615,100 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
 
     steps = {s["id"]: s for s in meeting.steps}
     first = meeting.steps[0]["start"]
+    invite = steps.get("invite")
     segments = meeting.ear.segments
     speech = [s for s in segments if s[1] >= 1.0]
     blips = [s for s in segments if s[1] < 1.0]
 
-    opening = [s for s in speech if s[0] < first]
-    check("开场播报", bool(opening), f"{sum(s[1] for s in opening):.0f} 秒")
+    # the assistant does not open: silent until the chair speaks, reads the
+    # agenda when invited, and hands the floor back
+    before = [s for s in speech if s[0] < first]
+    check(
+        "不抢着开场",
+        not before,
+        "主持人开口之前，会议助手一直安静"
+        if not before
+        else f"主持人还没开口，会议助手先说了 {sum(s[1] for s in before):.0f} 秒",
+    )
+    if invite:
+        nxt = steps.get("problem")
+        read = meeting.moderator_text_since(invite["start"])
+        if nxt:
+            read = " ".join(
+                s["text"]
+                for s in sorted(meeting.transcript.values(), key=lambda s: s["t"])
+                if s["role"] == "moderator" and invite["start"] <= s["t"] < nxt["start"]
+            )
+        first_title = meeting.config["agendas"][0]["title"]
+        # spoken as "三号", written "3 号": compare the part without the number
+        title_key = re.sub(r"^[0-9一二三四五六七八九十]+\s*号", "", first_title).replace(" ", "")
+        check(
+            "被邀请后播报议程",
+            title_key in read.replace(" ", ""),
+            read[:120] or "会议助手没有播报",
+        )
+        check(
+            "不宣布讨论开始",
+            not re.search(r"讨论正式开始|现在开始讨论", read),
+            "播报完把话交还给了主持人" if not re.search(r"讨论正式开始|现在开始讨论", read) else read[:120],
+        )
 
     off = steps.get("off_topic")
+    suggestions = [e for e in events if e["kind"] == "update:drift_suggestion"]
     warnings = [e for e in events if e["kind"] == "update:drift_warning"]
     if off:
-        early = [w for w in warnings if first <= w["t"] < off["start"]]
-        check("切题讨论未被打断", not early, f"{len(early)} 次误打断")
-        hit = next((w for w in warnings if w["t"] >= off["start"]), None)
-        if hit is None:
-            check("跑题被打断", False, "没有发出打断")
-        else:
-            spoke = next((s for s in segments if s[0] >= hit["t"] - 1 and s[1] >= 1.0), None)
+        early = [w for w in suggestions + warnings if first <= w["t"] < off["start"]]
+        check("切题讨论未被提示", not early, f"{len(early)} 次误提示")
+        hit = next((w for w in suggestions if w["t"] >= off["start"]), None)
+        check(
+            "跑题先提示主持人",
+            hit is not None,
+            f"开始跑题后 {hit['t'] - off['start']:.1f} 秒，看板提示了主持人（来源 {hit.get('source')}，{hit.get('reason')}）"
+            if hit
+            else "没有出现提示",
+        )
+        if hit is not None:
+            talked = [s for s in segments if off["start"] <= s[0] < hit["t"] and s[1] >= 1.0]
             check(
-                "跑题被打断",
-                spoke is not None,
-                f"开始跑题后 {hit['t'] - off['start']:.1f} 秒提示（来源 {hit.get('source')}，"
-                f"{hit.get('reason')}）；"
-                + (
-                    f"提示后 {spoke[0] - hit['t']:.1f} 秒开口，说了 {spoke[1]:.1f} 秒"
-                    if spoke
-                    else "主持人没有开口"
-                ),
+                "采纳之前不开口",
+                not talked,
+                "会议助手等主持人点了采纳才开口" if not talked else "没等主持人采纳就开了口",
             )
-            yielded = off.get("yielded_at")
-            check(
-                "跑题时被及时打断",
-                hit["t"] - off["start"] <= 8 and yielded is not None,
-                f"开始跑题后 {hit['t'] - off['start']:.1f} 秒发出提示；"
-                + (
-                    f"发言人在第 {yielded - off['start']:.1f} 秒被打断停下"
-                    if yielded is not None
-                    else f"发言人把 {off['speech_end'] - off['start']:.0f} 秒的话全部说完了"
-                ),
+        warn = next((w for w in warnings if w["t"] >= off["start"]), None)
+        spoke = (
+            next((s for s in segments if s[0] >= warn["t"] - 1 and s[1] >= 1.0), None)
+            if warn
+            else None
+        )
+        yielded = off.get("yielded_at")
+        check(
+            "采纳后提醒并让发言人停下",
+            spoke is not None and yielded is not None,
+            (
+                f"采纳后 {spoke[0] - warn['t']:.1f} 秒开口，说了 {spoke[1]:.1f} 秒；"
+                if spoke
+                else "采纳后会议助手没有开口；"
             )
+            + (
+                f"发言人在第 {yielded - off['start']:.1f} 秒停下"
+                if yielded is not None
+                else f"发言人把 {off['speech_end'] - off['start']:.0f} 秒的话全部说完了"
+            ),
+        )
+        said = meeting.moderator_text_since(off["start"])
+        chair_call = meeting.config.get("chairCallName") or "主持人"
+        check(
+            "提醒是对主持人说的",
+            bool(re.search(chair_call + "|主持人", said[:80])) and "各位，先停" not in said[:80],
+            said[:100] or "没有收到会议助手的话",
+        )
         later = [w for w in warnings if w["t"] > off["end"]]
-        check("回到议题后没有再打断", not later, f"{len(later)} 次")
+        check("回到议题后没有再提醒", not later, f"{len(later)} 次")
 
     chatter = [
-        s for s in speech if first <= s[0] < (off["start"] if off else first)
+        s
+        for s in speech
+        if (invite["end"] if invite else first) <= s[0] < (off["start"] if off else first)
     ]
     check(
         "正常讨论时保持安静",
@@ -665,24 +729,34 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
         f"{len(decisions)} 条，四要素不全 {len(incomplete)} 条，重复登记 {len(repeats)} 次",
     )
 
-    required = [a["name"] for a in meeting.config["attendees"] if a.get("required")]
     called = [e.get("attendeeName", "") for e in events if e["kind"] == "update:roll_call"]
-    missed = [n for n in required if not any(n in c for c in called)]
     check(
-        "点名征询必须发言的人",
-        not missed,
-        f"点名 {len(called)} 次：{'、'.join(called) or '无'}"
-        + (f"；没有点到 {'、'.join(missed)}" if missed else ""),
+        "没有逐个点名",
+        not called,
+        "整场没有点名" if not called else f"点名 {len(called)} 次：{'、'.join(called)}",
     )
 
     advances = [e for e in events if e["kind"] == "update:advance_agenda"]
     retried = [s["id"] for s in meeting.steps if s.get("retried")]
     check(
-        "议程推进",
+        "记录议程推进",
         [e.get("currentAgendaIndex") for e in advances] == [1] and not retried,
         f"推进 {len(advances)} 次：{[e.get('currentAgendaIndex') for e in advances]}"
-        + ("；参会人要求了两次才有反应" if retried else ""),
+        + ("；参会人说了两次才有反应" if retried else ""),
     )
+    close = steps.get("close_1")
+    plan = steps.get("plan")
+    if close and plan:
+        said = " ".join(
+            s["text"]
+            for s in sorted(meeting.transcript.values(), key=lambda s: s["t"])
+            if s["role"] == "moderator" and close["start"] <= s["t"] < plan["start"]
+        )
+        check(
+            "推进时不口头宣布",
+            not re.search(r"现在进入第|进入第\s*\d\s*项", said),
+            "看板同步了，会议助手没有宣布新议题" if not said else said[:100],
+        )
 
     check(
         "未决事项登记",
@@ -697,9 +771,11 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
         before = meeting.steps[max(0, meeting.steps.index(wrap) - 1)]
         closing = meeting.moderator_text_since(before["start"])
         check(
-            "会议总结",
-            bool(re.search(r"决议|未决", closing)),
-            closing[:160] or "主持人没有总结",
+            "会议小结（请主持人确认，不宣布散会）",
+            bool(re.search(r"决议|未决", closing))
+            and "请主持人确认" in closing
+            and "会议到此结束" not in closing,
+            closing[:160] or "会议助手没有做小结",
         )
 
     overtime = [e for e in events if e["kind"] == "update:overtime_warning"]
@@ -712,7 +788,7 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
         and len(s["text"]) > 12
         and len(re.findall(r"[A-Za-z]", s["text"])) > len(s["text"]) * 0.5
     ]
-    check("主持人全程说中文", not foreign, f"{len(foreign)} 段外语：{foreign[:2]}")
+    check("会议助手全程说中文", not foreign, f"{len(foreign)} 段外语：{foreign[:2]}")
 
     check("短促杂音", None, f"{len(blips)} 次不足 1 秒的声音")
 
@@ -733,14 +809,14 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
     )
 
     stuck = [e for e in events if e["kind"] == "wait_reply_timeout"]
-    check("主持人没有卡住", not stuck, f"等待超时 {len(stuck)} 次")
+    check("会议助手没有卡住", not stuck, f"等待超时 {len(stuck)} 次")
 
     moderator_seconds = sum(s[1] for s in speech)
     check(
         "发言占比",
         None,
         f"全程 {duration:.0f} 秒；参会人 {meeting.mic.spoken_seconds:.0f} 秒，"
-        f"主持人 {moderator_seconds:.0f} 秒",
+        f"会议助手 {moderator_seconds:.0f} 秒",
     )
 
     if minutes.get("status") == 200:
@@ -753,6 +829,8 @@ def analyse(meeting: Meeting, minutes: dict, duration: float) -> list[dict]:
             f"待确认事项 {len(m['actionItems'])} 条，时间线 {len(m['timeline'])} 条"
             + (f"；没有要点的议题：{empty}" if empty else ""),
         )
+    elif minutes.get("code") == "MISSING_API_KEY":
+        check("AI 纪要", None, "本地开发服务器没有 Cloudflare AI 绑定，已跳过（发布后在线上验证）")
     else:
         check("AI 纪要", False, f"HTTP {minutes.get('status')}：{minutes.get('error')}")
 
@@ -800,14 +878,9 @@ async def main():
     args = parser.parse_args()
 
     scenario = json.loads(Path(args.scenario).read_text(encoding="utf-8"))
-    instructions = build_instructions(scenario["config"])
+    instructions = build_instructions(with_call_names(scenario["config"]))
     lines = [(s["say"], s["text"]) for s in scenario["steps"]]
     lines += [(s["say"], s["retry"]) for s in scenario["steps"] if s.get("retry")]
-    for key, answers in scenario["answers"].items():
-        if key == "default":
-            lines += [(name, answers) for name in scenario["voices"]]
-        else:
-            lines += list(answers.items())
     for speaker, text in lines:  # synthesise before the clock starts
         synthesize(scenario["voices"][speaker], text)
 

@@ -12,9 +12,9 @@ export async function generateMetadata({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }): Promise<Metadata> {
-  let title = "SMJ | AI 会议主持人";
+  let title = "SMJ | 会议助手";
   let description =
-    "SMJ 会议制度执行器：装载公司真实会议模板，严格控时、跑题即刻打断、按名单点名征询、催办四要素决议并生成正式纪要。";
+    "SMJ 会议助手：协助主持人控时、提示跑题、记录决议与未决事项，并生成可回执确认的正式纪要。";
 
   const params = await searchParams;
   const presetId = params?.preset;
@@ -52,7 +52,7 @@ export default function Dashboard() {
       <header className="flex flex-col md:flex-row flex-shrink-0 gap-3 md:h-16 items-center justify-between px-4 md:px-8 py-4 w-full border-b border-separator1 min-w-0">
         <div className="flex items-center min-w-0 flex-shrink">
           <span className="text-lg font-light truncate">
-            AI 会议主持人
+            会议助手
           </span>
         </div>
         <div className="inline-flex flex-row items-center space-x-2 flex-shrink-0">
