@@ -34,3 +34,18 @@ test("the text of a streamed answer is put together, the reasoning left out", ()
   assert.equal(reader.content, '{"a": 1}');
   assert.equal(reader.finishReason, "stop");
 });
+
+test("the odd blocks at the end of a Workers AI stream are ignored", () => {
+  // seen on the deployed Worker (2026-10-09): a block without `choices` and a block with an empty one
+  const reader = new ChatStreamReader();
+  const send = (obj: unknown) => reader.push("data: " + JSON.stringify(obj) + "\n");
+  send({ choices: [{ delta: { reasoning_content: "想" } }] });
+  send({ choices: [{ delta: { content: '{"a":' } }] });
+  send({ choices: [{ delta: { content: "1}" }, finish_reason: "stop" }] });
+  send({ choices: [], usage: { total_tokens: 9 } });
+  send({ response: "", usage: { total_tokens: 9 } });
+  reader.push("data: [DONE]\n");
+  reader.end();
+  assert.equal(reader.content, '{"a":1}');
+  assert.equal(reader.finishReason, "stop");
+});

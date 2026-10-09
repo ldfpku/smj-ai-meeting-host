@@ -1,6 +1,7 @@
 import path from "node:path";
 import dotenv from "dotenv";
 import { SMJ_DEPARTMENTS, SMJ_PROCESSES, SMJ_ROLES } from "@/data/smj-org";
+import { modelsToTry } from "@/lib/ai-models";
 import { askWorker, isWorkerConfigured, WorkerError } from "@/lib/ai-worker";
 import {
   buildImportInput,
@@ -18,17 +19,16 @@ dotenv.config({ path: path.join(process.cwd(), "../.env.local") });
 /**
  * 会议文档导入：把会议通知、议程这类文档整理成标准会议配置。
  *
- * 文档在浏览器里读成文字后发到这里，由公司的 AI 网关（AI_WORKER_URL /
- * AI_WORKER_KEY）上的模型阅读，再由 normalizeImport 对照公司的部门、岗位、
- * 流程清单校验。只用网关，不用其他厂商的模型：会议文档不发到网关以外的地方。
+ * 文档在浏览器里读成文字后发到这里，由 Cloudflare Workers AI（经 Worker 的 env.AI
+ * 绑定，见 lib/ai-worker.ts）上的模型阅读，再由 normalizeImport 对照公司的部门、岗位、
+ * 流程清单校验。只用这一条路，不用其他厂商的模型：会议文档不发到 Cloudflare 以外的地方。
  *
- * 模型：2026-09-28 用两份样例文档比较了网关上的三个模型，三个都读得对，
+ * 模型：2026-09-28 用两份样例文档比较了三个模型，三个都读得对，
  * 也都没有执行文档里夹带的指令。glm-5.3-flash 最快（8–16 秒），
  * deepseek-v4-flash-0731 次之（12–28 秒）但偶尔自己补写议题目标，
  * qwen3.8-27b 最慢（27–40 秒）。AI_WORKER_IMPORT_MODEL 可以改用别的模型。
  */
-const MODEL = process.env.AI_WORKER_IMPORT_MODEL?.trim() || "glm-5.3-flash";
-const BACKUP_MODEL = "deepseek-v4-flash-0731";
+const MODEL = process.env.AI_WORKER_IMPORT_MODEL?.trim();
 const TIMEOUT_MS = 90_000;
 
 /** 本接口使用服务端密钥；上限防止有人拿它当通用的模型入口 */
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
     return Response.json(
       {
         error:
-          "服务端没有配置公司 AI 网关：请设置 AI_WORKER_URL 和 AI_WORKER_KEY。",
+          "服务端没有可用的 Cloudflare AI 绑定：检查 wrangler.jsonc 的 ai 配置；本地开发需要登录 ZY 账号。",
         code: "MISSING_API_KEY",
       },
       { status: 400 }
@@ -84,7 +84,7 @@ export async function POST(request: Request) {
   const system = buildImportInstruction(VOCABULARY);
   const input = buildImportInput(text, fileName);
 
-  const models = MODEL === BACKUP_MODEL ? [MODEL] : [MODEL, BACKUP_MODEL];
+  const models = modelsToTry(MODEL);
   const failures: { model: string; error: WorkerError }[] = [];
 
   for (const model of models) {
@@ -140,14 +140,14 @@ export async function POST(request: Request) {
           : new WorkerError(
               err instanceof Error && err.name === "TimeoutError"
                 ? "模型在 90 秒内没有整理完。"
-                : "无法连接到公司 AI 网关，请检查网络。",
+                : "无法连接到模型服务，请检查网络。",
               502
             );
       if (!(err instanceof WorkerError)) {
         console.error(`Meeting import (${model}) request failed:`, err);
       }
       failures.push({ model, error });
-      // 密钥不对、请求太频繁：换模型没有用
+      // 没有权限、请求太频繁：换模型没有用
       if ([400, 401, 403, 429].includes(error.status)) break;
     }
   }

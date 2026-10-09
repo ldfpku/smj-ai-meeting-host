@@ -16,6 +16,13 @@
   // resizes and recompresses the pictures. Without it the originals are sent
   // unchanged and the Worker logs "env.IMAGES binding is not defined".
   "images": { "binding": "IMAGES" },
+  // Text models (minutes, document import) run on Workers AI through this
+  // binding: the only way the app calls a text model, no keys involved. The
+  // binding belongs to the account pinned above. To route the calls through an
+  // AI Gateway of that account, put its id in AI_GATEWAY_ID (requests are then
+  // sent without cache and without log entries, see web/src/lib/ai-worker.ts).
+  "ai": { "binding": "AI" },
+  "vars": { "AI_GATEWAY_ID": "" },
   // Only the custom domain. A workers.dev or preview address would be a way
   // around the login.
   "workers_dev": false,

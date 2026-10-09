@@ -1,9 +1,9 @@
 import path from "node:path";
 import dotenv from "dotenv";
 import type { AiMinutes } from "@/data/meeting-minutes";
+import { modelsToTry } from "@/lib/ai-models";
 import { askWorker as askGateway, isWorkerConfigured, WorkerError } from "@/lib/ai-worker";
 import { parseJsonObject } from "@/lib/model-output";
-import { proxyFetch } from "@/lib/proxy-fetch";
 
 // 密钥放在仓库根目录的 .env.local（与 /api/token 一致），Next 默认只读 web/.env.local
 dotenv.config({ path: path.join(process.cwd(), "../.env.local") });
@@ -15,27 +15,15 @@ dotenv.config({ path: path.join(process.cwd(), "../.env.local") });
  * 由 generateMinutesMarkdown 并入正式纪要模板；决议与未决事项不经过模型，
  * 始终以会上登记的记录为准。
  *
- * 由谁来整理：
- *   1. 公司的 AI 网关（Cloudflare Worker，OpenAI 格式，AI_WORKER_URL / AI_WORKER_KEY）
- *   2. Gemini（Interactions API，GEMINI_API_KEY）
- * 两个都配置时先用网关，网关失败再用 Gemini；响应里写明实际用的是哪一个。
- * MINUTES_PROVIDER=worker 或 gemini 可以只用其中一个。
+ * 由谁来整理：Cloudflare Workers AI（经 Worker 的 env.AI 绑定，见 lib/ai-worker.ts）。
+ * 先用 AI_WORKER_MODEL（默认 glm-5.3-flash），失败就按 lib/ai-models.ts 的顺序换下一个模型；
+ * 响应里写明实际用的是哪一个。会议转写不发到 Cloudflare 以外的地方。
  */
 
-const GEMINI_MODEL =
-  process.env.GEMINI_MINUTES_MODEL?.trim() || "gemini-3.8-flash";
-const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/interactions";
-
-const WORKER_MODEL = process.env.AI_WORKER_MODEL?.trim() || "glm-5.3-flash";
+const WORKER_MODEL = process.env.AI_WORKER_MODEL?.trim();
 const WORKER_TIMEOUT_MS = 180_000;
 
-type Provider = "worker" | "gemini";
-
-const PROVIDER_LABELS: Record<Provider, string> = {
-  worker: "公司 AI 网关",
-  gemini: "Gemini",
-};
+const PROVIDER_LABEL = "Cloudflare Workers AI";
 
 /**
  * 90 分钟的会议转写约 2–3 万字，远小于模型的上下文；这个上限只是防御：
@@ -57,65 +45,6 @@ const SYSTEM_INSTRUCTION = `你是一家生产制造企业的会议记录员，�
 8. timeline 按时间顺序列出 5–12 个关键节点（议题切换、形成决议、出现分歧、主持人纠偏等），time 用给定的"会议开始后 mm:ss"。
 9. 全部用简体中文书写；英文术语、型号、缩写保持原样。`;
 
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    overallSummary: {
-      type: "string",
-      description: "两三句话概括本次会议讨论了什么、得出了什么结果",
-    },
-    agendas: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "议题标题，与给定议程完全一致" },
-          discussionPoints: { type: "array", items: { type: "string" } },
-          conclusion: { type: "string", description: "本议题的讨论结论，没有则为空字符串" },
-        },
-        required: ["title", "discussionPoints", "conclusion"],
-      },
-    },
-    actionItems: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          content: { type: "string" },
-          owner: { type: "string", description: "转写中提到的责任人，未提到则为空字符串" },
-          due: { type: "string", description: "转写中提到的完成时限，未提到则为空字符串" },
-          agendaTitle: { type: "string" },
-        },
-        required: ["content", "owner", "due", "agendaTitle"],
-      },
-    },
-    openIssues: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          issue: { type: "string" },
-          reason: { type: "string" },
-        },
-        required: ["issue", "reason"],
-      },
-    },
-    timeline: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          time: { type: "string", description: "会议开始后的时间，格式 mm:ss" },
-          event: { type: "string" },
-        },
-        required: ["time", "event"],
-      },
-    },
-  },
-  required: ["overallSummary", "agendas", "actionItems", "openIssues", "timeline"],
-};
-
-/** 网关上的模型不保证支持按结构输出，结构写进提示词里 */
 const JSON_SHAPE = `
 
 只输出一个 JSON 对象，不要输出任何其他文字，不要用代码块包裹。结构如下：
@@ -226,23 +155,6 @@ function buildInput(body: MinutesRequest, transcriptText: string): string {
     .join("\n");
 }
 
-/** Interactions API：文本在 steps[].content[] 里，取最后一段 model_output 的文本 */
-function extractText(json: any): string {
-  if (typeof json?.output_text === "string" && json.output_text.trim()) {
-    return json.output_text;
-  }
-  const steps = Array.isArray(json?.steps) ? json.steps : [];
-  let text = "";
-  for (const step of steps) {
-    if (step?.type !== "model_output") continue;
-    const parts = (Array.isArray(step.content) ? step.content : [])
-      .filter((c: any) => c?.type === "text" && typeof c.text === "string")
-      .map((c: any) => c.text);
-    if (parts.length) text = parts.join("");
-  }
-  return text;
-}
-
 const asString = (v: unknown) => (typeof v === "string" ? v : "");
 const asArray = (v: unknown): any[] => (Array.isArray(v) ? v : []);
 
@@ -329,12 +241,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const providers = availableProviders();
-  if (providers.length === 0) {
+  if (!isWorkerConfigured()) {
     return Response.json(
       {
         error:
-          "服务端没有配置可用的模型：请在根目录 .env.local 设置 AI_WORKER_URL 和 AI_WORKER_KEY，或 GEMINI_API_KEY。",
+          "服务端没有可用的 Cloudflare AI 绑定：检查 wrangler.jsonc 的 ai 配置；本地开发需要登录 ZY 账号。",
         code: "MISSING_API_KEY",
       },
       { status: 400 }
@@ -343,31 +254,31 @@ export async function POST(request: Request) {
 
   const input = buildInput(body, transcriptText);
   const agendaTitles = (body.config?.agendas ?? []).map((a) => a.title ?? "");
-  const failures: { provider: Provider; error: ProviderError }[] = [];
+  const models = modelsToTry(WORKER_MODEL);
+  const failures: { model: string; error: ProviderError }[] = [];
 
-  for (const provider of providers) {
+  for (const model of models) {
     try {
-      const text =
-        provider === "worker" ? await askWorker(input) : await askGemini(input);
+      const text = await askWorker(model, input);
       let parsed: unknown;
       try {
         parsed = parseJsonObject(text);
       } catch {
         console.error(
-          `Minutes (${provider}): output is not JSON. Head:`,
+          `Minutes (${model}): output is not JSON. Head:`,
           text.slice(0, 200)
         );
         throw new ProviderError("AI 返回的内容无法解析。", 502);
       }
       return Response.json({
         minutes: normalize(parsed, agendaTitles),
-        provider,
-        providerLabel: PROVIDER_LABELS[provider],
-        model: provider === "worker" ? WORKER_MODEL : GEMINI_MODEL,
-        // 网关没成功、改由 Gemini 整理时告诉记录人：转写这次发到了另一家
+        provider: "worker",
+        providerLabel: PROVIDER_LABEL,
+        model,
+        // 前面的模型没成功、换了一个时告诉记录人
         fallbackFrom: failures.map((f) => ({
-          provider: f.provider,
-          providerLabel: PROVIDER_LABELS[f.provider],
+          provider: f.model,
+          providerLabel: f.model,
           error: f.error.message,
         })),
         transcriptChars: transcriptText.length,
@@ -376,41 +287,29 @@ export async function POST(request: Request) {
       const error =
         err instanceof ProviderError
           ? err
-          : new ProviderError("无法连接到模型服务，请检查网络或代理配置。", 502);
+          : new ProviderError("无法连接到模型服务，请检查网络。", 502);
       if (!(err instanceof ProviderError)) {
-        console.error(`Minutes (${provider}) request failed:`, err);
+        console.error(`Minutes (${model}) request failed:`, err);
       }
-      failures.push({ provider, error });
+      failures.push({ model, error });
+      // 没有权限、请求太频繁：换模型没有用
+      if ([400, 401, 403, 429].includes(error.status)) break;
     }
   }
 
   const last = failures[failures.length - 1];
   return Response.json(
     {
-      error: failures
-        .map((f) => `${PROVIDER_LABELS[f.provider]}：${f.error.message}`)
-        .join(" "),
+      error: failures.map((f) => `${f.model}：${f.error.message}`).join(" "),
     },
     { status: last.error.status }
   );
 }
 
-function availableProviders(): Provider[] {
-  const configured: Provider[] = [];
-  if (isWorkerConfigured()) configured.push("worker");
-  if (process.env.GEMINI_API_KEY?.trim()) configured.push("gemini");
-
-  const only = process.env.MINUTES_PROVIDER?.trim().toLowerCase();
-  if (only === "worker" || only === "gemini") {
-    return configured.filter((p) => p === only);
-  }
-  return configured;
-}
-
-async function askWorker(input: string): Promise<string> {
+async function askWorker(model: string, input: string): Promise<string> {
   try {
     return await askGateway({
-      model: WORKER_MODEL,
+      model,
       system: SYSTEM_INSTRUCTION + JSON_SHAPE,
       input,
       maxTokens: 8192,
@@ -421,46 +320,4 @@ async function askWorker(input: string): Promise<string> {
     if (err instanceof WorkerError) throw new ProviderError(err.message, err.status);
     throw err;
   }
-}
-
-async function askGemini(input: string): Promise<string> {
-  const upstream = await proxyFetch(GEMINI_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-goog-api-key": process.env.GEMINI_API_KEY!.trim(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: GEMINI_MODEL,
-      system_instruction: SYSTEM_INSTRUCTION,
-      input,
-      response_format: {
-        type: "text",
-        mime_type: "application/json",
-        schema: RESPONSE_SCHEMA,
-      },
-      // 会议内容不留存在 Google 侧
-      store: false,
-    }),
-  });
-
-  if (!upstream.ok) {
-    const detail = await upstream.text().catch(() => "");
-    console.error(
-      `Minutes (gemini) failed (${upstream.status}):`,
-      detail.slice(0, 500)
-    );
-    throw new ProviderError(
-      upstream.status === 400 || upstream.status === 403
-        ? detail.includes("not available in your current location")
-          ? "当前网络所在地区无法访问 Gemini，请检查 HTTPS_PROXY 代理配置。"
-          : "请求被拒绝（密钥无效，或请求格式不被接受）。"
-        : upstream.status === 429
-        ? "请求过于频繁，请稍后再试。"
-        : `请求失败（HTTP ${upstream.status}）。`,
-      upstream.status
-    );
-  }
-
-  return extractText(await upstream.json().catch(() => null));
 }

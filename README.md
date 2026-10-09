@@ -57,6 +57,12 @@ see [agent/README.md](agent/README.md) for details and the production command.
 1. Navigate to the `/web` directory
 2. Install dependencies: `pnpm install`
 3. Run the development server: `pnpm dev`
+
+   Text-model features (AI minutes, import from a document) use the Worker's AI binding and are not
+   available in plain `pnpm dev`: those routes answer "no AI binding". Binding access from `next dev` is off
+   by default (`OPENNEXT_DEV_BINDINGS=1` turns it on, with the ZY wrangler login) and, on the development PC
+   used so far, the remote AI session failed with "internal error" while the same call works on the deployed
+   Worker. Check these two features after a deploy.
 4. Open [http://localhost:3000](http://localhost:3000) in your browser
 
 ## SMJ 会议主持人
@@ -92,10 +98,10 @@ see [agent/README.md](agent/README.md) for details and the production command.
 选择 md、docx、txt 文件，或直接粘贴文字，十几秒后会议名称、主持岗位、参会人和议题
 就填进表单。结果只填进表单，核对后点「确认并保存」才生效。
 
-- 文件在浏览器里读取（docx 的表格、标题和列表会保留），只把文字发给公司的 AI 网关
-  （`AI_WORKER_URL` / `AI_WORKER_KEY`）。这个功能不使用其他厂商的模型。
-- 模型默认 `glm-5.3-flash`，失败时改用 `deepseek-v4-flash-0731`；
-  `AI_WORKER_IMPORT_MODEL` 可以换成网关上的其他模型。2026-09-28 的比较结果写在
+- 文件在浏览器里读取（docx 的表格、标题和列表会保留），只把文字发给 Cloudflare Workers AI
+  （Worker 的 `AI` 绑定，不需要密钥）。这个功能不使用其他厂商的模型。
+- 模型默认 `glm-5.3-flash`，失败时依次改用 `deepseek-v4-flash-0731`、`qwen3.8-27b`
+  （清单在 `web/src/lib/ai-models.ts`）；`AI_WORKER_IMPORT_MODEL` 可以换首选模型。2026-09-28 的比较结果写在
   `web/src/app/api/meeting-import/route.ts` 开头。
 - 模型只负责读文档。部门、岗位、流程编号由 `web/src/lib/meeting-import.ts` 对照公司清单
   校验：「生产部」「质量部部长」这样的简称会换成清单里的名称；清单里没有的照文档原样填写，
@@ -206,9 +212,9 @@ LiveKit 按连接时长计费，有没有人说话都一样。会议因此有四
 
 - 转写、决议、未决事项和介入记录保存在**浏览器本机**（IndexedDB），刷新页面后仍可查看
   上一场会议并生成纪要。数据不会上传；换一台电脑或换一个浏览器就看不到。
-- 纪要整理默认走公司的 AI 网关（`AI_WORKER_URL` / `AI_WORKER_KEY`，OpenAI 格式，
-  模型 `glm-5.3-flash`），约需 20 – 50 秒。网关失败时改用 Gemini，界面上会提示。
-  设置 `MINUTES_PROVIDER=worker` 可以禁止改用 Gemini。
+- 纪要整理走 Cloudflare Workers AI（Worker 的 `AI` 绑定，不需要密钥；模型 `glm-5.3-flash`），
+  约需 20 – 50 秒。某个模型失败时依次改用清单里的下一个，界面上会提示。文本模型只有这一条调用路径，
+  不再直连 Google。
 - 「AI 纪要」由记录人手动触发：AI 根据转写整理讨论要点、待确认事项和时间线，
   生成可编辑的草稿，校对后再复制或导出。决议与未决事项始终以会上登记的记录为准。
 - 转写**不区分具体发言人**（当前语音模型不支持说话人分离），所有参会人的发言都记为「会场」。
@@ -276,9 +282,11 @@ bash scripts/cf-deploy.sh
 账号不是 `wrangler.jsonc` 里锁定的那个时会拒绝发布。
 
 密钥存在 Worker 的 secret 里，只在首次发布或更换时设置：
-`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`GEMINI_API_KEY`、
-`AI_WORKER_URL`、`AI_WORKER_KEY`。可以逐个用 `bash scripts/cf-deploy.sh secret put <名称>`，
-或在仓库根运行 `bash web/scripts/cf-set-secrets.sh`，把 `.env.local` 里的这六项一次写入（不打印值）。
+`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`GEMINI_API_KEY`（后者只用于试听音色）。
+可以逐个用 `bash scripts/cf-deploy.sh secret put <名称>`，
+或在仓库根运行 `bash web/scripts/cf-set-secrets.sh`，把 `.env.local` 里的这几项一次写入（不打印值）。
+文本模型不需要密钥：`wrangler.jsonc` 里的 `ai` 绑定属于 ZY 账号；要改走该账号里的某个 AI Gateway，
+把它的 id 填进 `vars.AI_GATEWAY_ID`（之后每次调用都不缓存、不留日志）。
 不要设置 `LIVEKIT_AGENT_NAME`：线上要连的是默认名称的 agent。
 
 Worker 指定在美国西部运行（`wrangler.jsonc` 的 `placement`）。Gemini 会拒绝来自部分地区

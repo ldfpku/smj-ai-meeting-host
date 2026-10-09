@@ -2,7 +2,7 @@
 # Writes the Worker's secrets from the repository's .env.local to the account
 # pinned in wrangler.jsonc (through cf-deploy.sh, so the login is the right one).
 #
-#   bash web/scripts/cf-set-secrets.sh            # all six
+#   bash web/scripts/cf-set-secrets.sh            # all four
 #   bash web/scripts/cf-set-secrets.sh LIVEKIT_URL LIVEKIT_API_KEY   # only these
 #
 # Values are read from ../.env.local and passed on through stdin: they are never
@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-allowed=(LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET GEMINI_API_KEY AI_WORKER_URL AI_WORKER_KEY)
+allowed=(LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET GEMINI_API_KEY)
 names=("$@")
 [ ${#names[@]} -gt 0 ] || names=("${allowed[@]}")
 
